@@ -5,6 +5,7 @@ Small local plugins for OpenCode 2. Each folder is one plugin: point OpenCode at
 | Plugin | What it does |
 | --- | --- |
 | [claude-usage](claude-usage/) | Shows your Claude subscription usage (5-hour and weekly window) as coloured meters under the prompt, plus a `/claude-usage` dialog. Read only. |
+| [quote](quote/) | Highlight text in the chat, press `ctrl+y`, and it is attached as a quote to your next message, with your comment underneath. Italian interface. |
 
 ## Install a plugin
 
@@ -24,4 +25,5 @@ OpenCode 2.2 loads only directories as plugins, and reloads only the files insid
 
 ```sh
 cd claude-usage && bun test
+cd ../quote && bun test
 ```
