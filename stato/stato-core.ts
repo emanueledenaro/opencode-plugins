@@ -3,15 +3,16 @@
 
 export type StatoKind = "done" | "broken" | "progress" | "next" | "plain"
 
-// The in-progress symbol that is drawn.
-export const PROGRESS_SYMBOL = "◐"
+// The in-progress symbol that is drawn (U+2248, one column wide).
+export const PROGRESS_SYMBOL = "≈"
 
-// First symbol of a line -> meaning. The four symbols of the status replies. `…` is the old in-progress symbol,
-// still recognised so old messages keep their colour.
+// First symbol of a line -> meaning. The four symbols of the status replies. `◐` and `…` are earlier in-progress
+// symbols, still recognised so old messages keep their colour.
 const SYMBOLS: Record<string, StatoKind | undefined> = {
   "✓": "done",
   "✗": "broken",
   [PROGRESS_SYMBOL]: "progress",
+  "◐": "progress",
   "…": "progress",
   "➜": "next",
 }
@@ -63,7 +64,7 @@ export function rowText(line: string): string {
   return line === "" ? " " : line
 }
 
-// Text drawn for a line: an in-progress line shows `◐` in place of its own symbol (`…` in old messages), with the
+// Text drawn for a line: an in-progress line shows `≈` in place of its own symbol (`◐` or `…` in older messages), with the
 // indentation and the rest of the line kept; any other line is drawn as written.
 export function lineText(line: StatoLine): string {
   if (line.kind !== "progress") return rowText(line.text)

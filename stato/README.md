@@ -6,16 +6,16 @@ An OpenCode 2 plugin that colours status lines in a fenced block with the langua
 | --- | --- | --- |
 | `✓` | done | success |
 | `✗` | broken or blocked | error |
-| `◐` | in progress | warning |
+| `≈` | in progress | warning |
 | `➜` | next step | info |
 
-`…`, the old in-progress symbol, is still recognised, so older messages keep their colour. It is drawn as `◐`; the text of the message is not changed. A line with any other first character, and an empty line, is drawn in the normal text colour. Leading spaces are skipped, so an indented line keeps its colour. Only the first symbol counts. Long lines wrap like normal text.
+`◐` and `…`, the earlier in-progress symbols, are still recognised, so older messages keep their colour. Both are drawn as `≈`; the text of the message is not changed. A line with any other first character, and an empty line, is drawn in the normal text colour. Leading spaces are skipped, so an indented line keeps its colour. Only the first symbol counts. Long lines wrap like normal text.
 
 ````
 ```stato
 ✓ tests pass
 ✗ build fails: DATABASE_URL is missing
-◐ checking the rest
+≈ checking the rest
 ➜ open the pull request
 ```
 ````
@@ -53,7 +53,7 @@ If you edit the plugin files, `/reload` picks them up.
 
 ## Tell the model to use it
 
-The plugin only draws the block. To have the assistant write status replies in it, say so in your `AGENTS.md`, for example: "Put each status line in a ```stato block, starting with ✓ done, ✗ broken, ◐ in progress or ➜ next step."
+The plugin only draws the block. To have the assistant write status replies in it, say so in your `AGENTS.md`, for example: "Put each status line in a ```stato block, starting with ✓ done, ✗ broken, ≈ in progress or ➜ next step."
 
 ## Files
 

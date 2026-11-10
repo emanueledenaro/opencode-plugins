@@ -44,17 +44,18 @@ describe("createStatoRenderer", () => {
     expect(made.boxes[0]!.children).toEqual([
       { content: "✓ a", fg: "OK" },
       { content: "✗ b", fg: "ERR" },
-      { content: "◐ c", fg: "WARN" },
+      { content: "≈ c", fg: "WARN" },
       { content: "➜ d", fg: "INFO" },
       { content: "e", fg: "BASE" },
     ])
   })
-  test("a ◐ line and a … line are both drawn with ◐ in the warning colour", () => {
+  test("a ≈ line, a ◐ line and a … line are all drawn with ≈ in the warning colour", () => {
     const { deps, made } = fakes()
-    createStatoRenderer(deps)({ text: "◐ nuovo\n  … vecchio" }, helpers)
+    createStatoRenderer(deps)({ text: "≈ nuovo\n◐ prima\n  … vecchio" }, helpers)
     expect(made.boxes[0]!.children).toEqual([
-      { content: "◐ nuovo", fg: "WARN" },
-      { content: "  ◐ vecchio", fg: "WARN" },
+      { content: "≈ nuovo", fg: "WARN" },
+      { content: "≈ prima", fg: "WARN" },
+      { content: "  ≈ vecchio", fg: "WARN" },
     ])
   })
   test("an empty line becomes a one-space row", () => {
