@@ -12,7 +12,7 @@ Small local plugins for OpenCode 2. Each folder is one plugin: point OpenCode at
 | [apple-theme](apple-theme/) | Not a plugin: a colour theme with the macOS system colours, dark and light, with a transparent background. |
 | [notify](notify/) | A notification and a short sound when the terminal is not focused and OpenCode finished a reply, asks a permission or waits for an answer. At most one per 20 s. |
 | [token-rate](token-rate/) | Shows the last reply's output speed (`42 tok/s`) beside the other footer items, and logs each measurement. |
-| [stato](stato/) | Fenced `stato` blocks in the chat get one theme colour per line, chosen by its first symbol: `✓` green, `✗` red, `◐` the warning colour (it spins in the latest reply), `➜` the info colour. Reads the block text and the cached messages of the session on screen. |
+| [stato](stato/) | Fenced `stato` blocks in the chat get one theme colour per line, chosen by its first symbol: `✓` green, `✗` red, `◐` the warning colour (`…` still works), `➜` the info colour. Reads only the block text. |
 
 ## Install a plugin
 
