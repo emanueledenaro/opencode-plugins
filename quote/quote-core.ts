@@ -4,15 +4,20 @@
 export const MAX_QUOTE_CHARS = 20_000
 export const PENDING_TTL_MS = 60 * 60 * 1000
 export const MAX_QUOTES = 5
+export const MAX_COMMENT_CHARS = 2000
 export const CHIP_PREVIEW_CHARS = 80
+// A row with a comment must also fit the comment, so its quote preview is shorter.
+export const CHIP_PREVIEW_WITH_COMMENT_CHARS = 40
+export const COMMENT_PREVIEW_CHARS = 30
 export const QUOTE_NAME = "Citazione"
 export const QUOTE_DESCRIPTION = "Testo citato dall'utente nella conversazione"
+export const QUOTE_COMMENT_DESCRIPTION = "Testo citato dall'utente e il suo commento su questo pezzo"
 export const SELECTION_WINDOW_MS = 6_000
 export const TRUNCATION_NOTE = "[citazione troncata]"
 
 const MAX_FUTURE_SKEW_MS = 5 * 60 * 1000
 const SESSION_ID_PATTERN = /^ses_[A-Za-z0-9]{1,100}$/
-const PENDING_VERSION = 2
+const PENDING_VERSION = 3
 
 /** The slice of the file system the plugin uses. `dir` is the only folder it may touch. */
 export interface PendingFs {
@@ -27,9 +32,17 @@ export interface Selection {
   at: number
 }
 
-export type PendingParse = { status: "ok"; quotes: string[]; createdAt: number } | { status: "expired" | "invalid" }
+/** One pending quote: the cited text and the user's comment on it ("" when there is none). */
+export interface PendingQuote {
+  text: string
+  comment: string
+}
 
-export type AddResult = { status: "added"; quotes: string[] } | { status: "full" | "limit" | "invalid" | "error" }
+export type PendingParse = { status: "ok"; quotes: PendingQuote[]; createdAt: number } | { status: "expired" | "invalid" }
+
+export type AddResult = { status: "added"; quotes: PendingQuote[] } | { status: "full" | "limit" | "invalid" | "error" }
+
+export type Room = "ok" | "full" | "limit" | "invalid" | "error"
 
 const isHighSurrogate = (code: number) => code >= 0xd800 && code <= 0xdbff
 
@@ -46,6 +59,13 @@ export const normalizeSelection = (raw: unknown): string | null => {
   return text.trim() === "" ? null : text
 }
 
+/** The comment as stored: one line, trimmed, at most MAX_COMMENT_CHARS. "" when there is nothing. */
+export const normalizeComment = (raw: unknown): string => {
+  if (typeof raw !== "string") return ""
+  const flat = raw.replace(/\s*[\r\n]+\s*/g, " ").trim()
+  return flat.length <= MAX_COMMENT_CHARS ? flat : cutAt(flat, MAX_COMMENT_CHARS)
+}
+
 const cutAt = (text: string, budget: number): string => {
   let end = budget
   if (end > 0 && isHighSurrogate(text.charCodeAt(end - 1))) end -= 1 // never inside a surrogate pair
@@ -53,39 +73,47 @@ const cutAt = (text: string, budget: number): string => {
 }
 
 /**
- * One character budget (MAX_QUOTE_CHARS) shared by all the quotes, in order. The quote that crosses it is
- * cut and ends with the note; quotes after it keep their place and hold only the note.
+ * One character budget (MAX_QUOTE_CHARS) shared by all the quotes and their comments, in order. The quote
+ * that crosses it is cut and ends with the note; its comment is kept whole when it can be, because it is the
+ * user's own words. Quotes after it keep their place and hold only the note.
  */
-export const capQuotes = (quotes: readonly string[]): { quotes: string[]; truncated: boolean } => {
+export const capQuotes = (quotes: readonly PendingQuote[]): { quotes: PendingQuote[]; truncated: boolean } => {
   let remaining = MAX_QUOTE_CHARS
   let truncated = false
   const capped = quotes.map((quote) => {
-    if (quote.length <= remaining) {
-      remaining -= quote.length
+    const cost = quote.text.length + quote.comment.length
+    if (cost <= remaining) {
+      remaining -= cost
       return quote
     }
     truncated = true
-    const body = cutAt(quote, remaining)
+    const comment = cutAt(quote.comment, Math.min(quote.comment.length, remaining))
+    const body = cutAt(quote.text, remaining - comment.length)
     remaining = 0
-    return body === "" ? TRUNCATION_NOTE : `${body}\n\n${TRUNCATION_NOTE}`
+    // The note says the quote was cut, so it is added only when the text itself lost something.
+    if (body.length === quote.text.length) return { text: quote.text, comment }
+    return { text: body === "" ? TRUNCATION_NOTE : `${body}\n\n${TRUNCATION_NOTE}`, comment }
   })
   return { quotes: capped, truncated }
 }
 
-/** One quote against the whole budget. */
+/** One quote text against the whole budget. */
 export const capQuote = (text: string): { text: string; truncated: boolean } => {
-  const result = capQuotes([text])
-  return { text: result.quotes[0] ?? "", truncated: result.truncated }
+  const result = capQuotes([{ text, comment: "" }])
+  return { text: result.quotes[0]?.text ?? "", truncated: result.truncated }
 }
 
 /** What the chip shows: the first characters in quotes, and a line count when there are several lines. */
-export const chipSummary = (text: string): { preview: string; lines: number; lineLabel: string } => {
+export const chipSummary = (
+  text: string,
+  max: number = CHIP_PREVIEW_CHARS,
+): { preview: string; lines: number; lineLabel: string } => {
   const lines = text.replace(/\n+$/, "").split("\n").length
   const flat = text.replace(/\s+/g, " ").trim()
   let preview = flat
   let cut = false
-  if (flat.length > CHIP_PREVIEW_CHARS) {
-    let end = CHIP_PREVIEW_CHARS
+  if (flat.length > max) {
+    let end = max
     if (isHighSurrogate(flat.charCodeAt(end - 1))) end += 1
     preview = flat.slice(0, end)
     cut = true
@@ -93,19 +121,60 @@ export const chipSummary = (text: string): { preview: string; lines: number; lin
   return { preview: `«${preview}${cut ? "…" : ""}»`, lines, lineLabel: lines > 1 ? `${lines} righe` : "" }
 }
 
+/** The comment shortened for the box: one line, at most COMMENT_PREVIEW_CHARS, with an ellipsis when cut. */
+export const commentPreview = (comment: string): string => {
+  const flat = comment.replace(/\s+/g, " ").trim()
+  if (flat.length <= COMMENT_PREVIEW_CHARS) return flat
+  let end = COMMENT_PREVIEW_CHARS
+  if (isHighSurrogate(flat.charCodeAt(end - 1))) end += 1
+  return `${flat.slice(0, end)}…`
+}
+
+/** What one row of the box shows: the quote preview (shorter when there is a comment), line label, comment. */
+export const rowSummary = (quote: PendingQuote): { preview: string; lineLabel: string; comment: string } => {
+  const max = quote.comment === "" ? CHIP_PREVIEW_CHARS : CHIP_PREVIEW_WITH_COMMENT_CHARS
+  const summary = chipSummary(quote.text, max)
+  return { preview: summary.preview, lineLabel: summary.lineLabel, comment: commentPreview(quote.comment) }
+}
+
+/** The line shown in the comment dialog: the quote preview, with the line count in brackets if several. */
+export const dialogPreview = (text: string): string => {
+  const summary = chipSummary(text)
+  return summary.lineLabel === "" ? summary.preview : `${summary.preview} (${summary.lineLabel})`
+}
+
 /** "Citazione" for a single quote, "Citazione 1", "Citazione 2", ... when there are several. */
 export const attachmentName = (index: number, total: number): string =>
   total <= 1 ? QUOTE_NAME : `${QUOTE_NAME} ${index + 1}`
 
-export const buildQuoteDataUri = (text: string): string =>
-  `data:text/plain;base64,${Buffer.from(capQuote(text).text, "utf8").toString("base64")}`
+/**
+ * The attachment content: just the quote, or the comment first and then the quote. The comment is one
+ * line and comes first, so text inside the quote can never pose as the user's comment.
+ */
+export const formatAttachment = (quote: PendingQuote): string =>
+  quote.comment === "" ? quote.text : `Commento:\n${quote.comment}\n\nTesto citato:\n${quote.text}`
 
-export const serializePending = (quotes: readonly string[], now: number): string =>
+export const attachmentDescription = (quote: PendingQuote): string =>
+  quote.comment === "" ? QUOTE_DESCRIPTION : QUOTE_COMMENT_DESCRIPTION
+
+export const buildQuoteDataUri = (quote: PendingQuote): string =>
+  `data:text/plain;base64,${Buffer.from(formatAttachment(capQuotes([quote]).quotes[0] ?? quote), "utf8").toString("base64")}`
+
+export const serializePending = (quotes: readonly PendingQuote[], now: number): string =>
   JSON.stringify({ v: PENDING_VERSION, quotes, createdAt: now })
 
 const isQuoteText = (value: unknown): value is string => typeof value === "string" && value.trim() !== ""
 
-/** Reads version 2 (a list of quotes) and the old version 1 (one quote, read as a list of one). */
+const asPendingQuote = (value: unknown): PendingQuote | undefined => {
+  if (typeof value !== "object" || value === null) return undefined
+  const { text, comment } = value as Record<string, unknown>
+  if (!isQuoteText(text) || text.length > MAX_QUOTE_CHARS + TRUNCATION_NOTE.length + 2) return undefined
+  // Only a comment the plugin itself could have written: one line, trimmed, within the cap.
+  if (typeof comment !== "string" || comment !== normalizeComment(comment)) return undefined
+  return { text, comment }
+}
+
+/** Reads version 3 (quotes with comments) and the old versions: v2 (a list of texts), v1 (one text). */
 export const parsePending = (raw: string, now: number): PendingParse => {
   let value: unknown
   try {
@@ -116,15 +185,21 @@ export const parsePending = (raw: string, now: number): PendingParse => {
   if (typeof value !== "object" || value === null) return { status: "invalid" }
   const record = value as Record<string, unknown>
 
-  let quotes: string[]
+  let quotes: PendingQuote[]
   if (record.v === 1) {
     if (!isQuoteText(record.text)) return { status: "invalid" }
-    quotes = [record.text]
-  } else if (record.v === PENDING_VERSION) {
+    quotes = [{ text: record.text, comment: "" }]
+  } else if (record.v === 2) {
     const list = record.quotes
     if (!Array.isArray(list) || list.length < 1 || list.length > MAX_QUOTES || !list.every(isQuoteText))
       return { status: "invalid" }
-    quotes = list
+    quotes = list.map((text) => ({ text, comment: "" }))
+  } else if (record.v === PENDING_VERSION) {
+    const list = record.quotes
+    if (!Array.isArray(list) || list.length < 1 || list.length > MAX_QUOTES) return { status: "invalid" }
+    const parsed = list.map(asPendingQuote)
+    if (parsed.some((quote) => quote === undefined)) return { status: "invalid" }
+    quotes = parsed as PendingQuote[]
   } else {
     return { status: "invalid" }
   }
@@ -139,29 +214,54 @@ export const parsePending = (raw: string, now: number): PendingParse => {
 export const selectionFresh = (selection: Selection | undefined, now: number): boolean =>
   selection !== undefined && now - selection.at < SELECTION_WINDOW_MS
 
-/** True when both lists hold the same quotes in the same order (or both are missing). */
-export const sameList = (a: readonly string[] | undefined, b: readonly string[] | undefined): boolean => {
+/** True when both lists hold the same quotes and comments in the same order (or both are missing). */
+export const sameList = (a: readonly PendingQuote[] | undefined, b: readonly PendingQuote[] | undefined): boolean => {
   if (a === undefined || b === undefined) return a === b
-  return a.length === b.length && a.every((quote, index) => quote === b[index])
+  return a.length === b.length && a.every((quote, index) => quote.text === b[index]!.text && quote.comment === b[index]!.comment)
+}
+
+const usedChars = (quotes: readonly PendingQuote[]) =>
+  quotes.reduce((total, quote) => total + quote.text.length + quote.comment.length, 0)
+
+const roomFor = (current: readonly PendingQuote[]): Room => {
+  if (current.length >= MAX_QUOTES) return "full"
+  // The shared character budget is used up: a new quote would be only the truncation note.
+  if (usedChars(current) >= MAX_QUOTE_CHARS) return "limit"
+  return "ok"
+}
+
+/** The quotes the file holds now; an expired or corrupt file counts as empty. Throws when it cannot be read. */
+const readCurrent = (fs: PendingFs, path: string, now: number): PendingQuote[] => {
+  const raw = fs.read(path)
+  const parsed = raw === undefined ? undefined : parsePending(raw, now)
+  return parsed?.status === "ok" ? parsed.quotes : []
+}
+
+/** Whether one more quote fits ("ok"), asked before the comment dialog so nobody types for nothing. Read only. */
+export const pendingRoom = (sessionID: unknown, fs: PendingFs, now: number): Room => {
+  const name = pendingFileName(sessionID)
+  if (name === null) return "invalid"
+  try {
+    return roomFor(readCurrent(fs, pathFor(fs, name), now))
+  } catch {
+    return "error"
+  }
 }
 
 /**
- * Adds one quote to the session's pending list (at most MAX_QUOTES) and renews the expiry. An expired or
- * corrupt old file starts a fresh list; an old file that cannot be read is left alone ("error").
+ * Adds one quote with its comment to the session's pending list (at most MAX_QUOTES) and renews the expiry.
+ * An expired or corrupt old file starts a fresh list; an old file that cannot be read is left alone ("error").
  */
-export const addPending = (sessionID: unknown, text: string, fs: PendingFs, now: number): AddResult => {
+export const addPending = (sessionID: unknown, text: string, comment: unknown, fs: PendingFs, now: number): AddResult => {
   const name = pendingFileName(sessionID)
   const quote = normalizeSelection(text)
   if (name === null || quote === null) return { status: "invalid" }
   try {
     const path = pathFor(fs, name)
-    const raw = fs.read(path)
-    const parsed = raw === undefined ? undefined : parsePending(raw, now)
-    const current = parsed?.status === "ok" ? parsed.quotes : []
-    if (current.length >= MAX_QUOTES) return { status: "full" }
-    // The shared character budget is used up: a new quote would be only the truncation note.
-    if (current.reduce((total, q) => total + q.length, 0) >= MAX_QUOTE_CHARS) return { status: "limit" }
-    const next = capQuotes([...current, quote]).quotes
+    const current = readCurrent(fs, path, now)
+    const room = roomFor(current)
+    if (room !== "ok") return { status: room }
+    const next = capQuotes([...current, { text: quote, comment: normalizeComment(comment) }]).quotes
     fs.write(path, serializePending(next, now))
     return { status: "added", quotes: next }
   } catch {
@@ -170,7 +270,7 @@ export const addPending = (sessionID: unknown, text: string, fs: PendingFs, now:
 }
 
 /** The pending quotes of a session as the file holds them now, or undefined. Read only. */
-export const loadPending = (sessionID: unknown, fs: PendingFs, now: number): string[] | undefined => {
+export const loadPending = (sessionID: unknown, fs: PendingFs, now: number): PendingQuote[] | undefined => {
   const name = pendingFileName(sessionID)
   if (name === null) return undefined
   try {
@@ -186,14 +286,15 @@ export const loadPending = (sessionID: unknown, fs: PendingFs, now: number): str
 /**
  * Removes one quote (by index, or "last" for the most recently added) and returns what is left. The expiry
  * is not renewed. Removing the only quote deletes the file. Undefined when nothing could be done.
+ * With `expected`, the quote is removed only if it is still the one the user clicked.
  */
 export const removePending = (
   sessionID: unknown,
   which: number | "last",
   fs: PendingFs,
   now: number,
-  expected?: string,
-): string[] | undefined => {
+  expected?: PendingQuote,
+): PendingQuote[] | undefined => {
   const name = pendingFileName(sessionID)
   if (name === null) return undefined
   try {
@@ -205,7 +306,7 @@ export const removePending = (
     const index = which === "last" ? parsed.quotes.length - 1 : which
     if (!Number.isInteger(index) || index < 0 || index >= parsed.quotes.length) return parsed.quotes
     // The box can lag the file by a second: remove only the quote the user clicked.
-    if (expected !== undefined && parsed.quotes[index] !== expected) return parsed.quotes
+    if (expected !== undefined && !sameList([parsed.quotes[index]!], [expected])) return parsed.quotes
     const next = parsed.quotes.filter((_, position) => position !== index)
     if (next.length === 0) {
       fs.remove(path)
@@ -230,8 +331,8 @@ export const clearPending = (sessionID: unknown, fs: PendingFs): void => {
 
 /**
  * The body of the server "prompt" hook. It looks at one file only (the event's own session), attaches
- * the quotes as files named "Citazione" (or "Citazione 1", "Citazione 2", ...) and consumes the file. It never throws and never logs: on any
- * problem the prompt is left exactly as it came.
+ * the quotes as files named "Citazione" (or "Citazione 1", "Citazione 2", ...), each with its comment, and
+ * consumes the file. It never throws and never logs: on any problem the prompt is left exactly as it came.
  */
 export const applyQuoteToPrompt = (event: unknown, fs: PendingFs, now: number): void => {
   try {
@@ -251,10 +352,10 @@ export const applyQuoteToPrompt = (event: unknown, fs: PendingFs, now: number): 
     }
 
     const quotes = capQuotes(parsed.quotes).quotes
-    const entries = quotes.map((text, index) => ({
-      uri: buildQuoteDataUri(text),
+    const entries = quotes.map((quote, index) => ({
+      uri: buildQuoteDataUri(quote),
       name: attachmentName(index, quotes.length),
-      description: QUOTE_DESCRIPTION,
+      description: attachmentDescription(quote),
     }))
     const target = prompt as { files?: unknown[] }
     const files = Array.isArray(target.files) ? target.files : []
