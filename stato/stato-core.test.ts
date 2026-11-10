@@ -1,12 +1,21 @@
 import { describe, expect, test } from "bun:test"
-import { MAX_LINES, colourFor, rowText, statoKind, statoLines } from "./stato-core"
+import { MAX_LINES, PROGRESS_SYMBOL, colourFor, lineText, rowText, statoKind, statoLines } from "./stato-core"
 
 describe("statoKind", () => {
   test("each of the four symbols has its own meaning", () => {
     expect(statoKind("✓ fatto")).toBe("done")
     expect(statoKind("✗ rotto")).toBe("broken")
-    expect(statoKind("… in corso")).toBe("progress")
+    expect(statoKind("≈ in corso")).toBe("progress")
     expect(statoKind("➜ prossimo")).toBe("next")
+  })
+  test("the earlier in-progress symbols ◐ and … still count", () => {
+    expect(statoKind("◐ in corso")).toBe("progress")
+    expect(statoKind("… in corso")).toBe("progress")
+    expect(statoKind("  … in corso")).toBe("progress")
+  })
+  test("similar-looking symbols are not in progress", () => {
+    expect(statoKind("~ circa")).toBe("plain")
+    expect(statoKind("≠ diverso")).toBe("plain")
   })
   test("the symbol alone on the line counts", () => {
     expect(statoKind("✓")).toBe("done")
@@ -14,7 +23,7 @@ describe("statoKind", () => {
   })
   test("leading spaces and tabs are skipped", () => {
     expect(statoKind("   ✗ rotto")).toBe("broken")
-    expect(statoKind("\t… in corso")).toBe("progress")
+    expect(statoKind("\t≈ in corso")).toBe("progress")
   })
   test("only the first symbol decides", () => {
     expect(statoKind("✓ fatto ✗ non rotto")).toBe("done")
@@ -113,5 +122,35 @@ describe("rowText", () => {
   })
   test("other lines are left as they are, indentation included", () => {
     expect(rowText("  ✓ a")).toBe("  ✓ a")
+  })
+})
+
+describe("lineText", () => {
+  const line = (text: string) => ({ text, kind: statoKind(text) })
+  test("the in-progress symbol is ≈ (U+2248)", () => {
+    expect(PROGRESS_SYMBOL).toBe("≈")
+    expect(PROGRESS_SYMBOL.codePointAt(0)).toBe(0x2248)
+  })
+  test("a … line is drawn with ≈ in its place", () => {
+    expect(lineText(line("… controllo"))).toBe("≈ controllo")
+  })
+  test("a ◐ line is drawn with ≈ in its place", () => {
+    expect(lineText(line("◐ controllo"))).toBe("≈ controllo")
+  })
+  test("a ≈ line is drawn as written", () => {
+    expect(lineText(line("≈ controllo"))).toBe("≈ controllo")
+  })
+  test("indentation and the rest of the line are kept, a later … or ◐ stays", () => {
+    expect(lineText(line("  \t… a … b ◐"))).toBe("  \t≈ a … b ◐")
+  })
+  test("a symbol alone on the line is replaced", () => {
+    expect(lineText(line("…"))).toBe("≈")
+    expect(lineText(line("◐"))).toBe("≈")
+  })
+  test("other lines are drawn as written, empty ones as one space", () => {
+    expect(lineText(line("✓ fatto"))).toBe("✓ fatto")
+    expect(lineText(line("testo … libero"))).toBe("testo … libero")
+    expect(lineText(line("➜ poi …"))).toBe("➜ poi …")
+    expect(lineText(line(""))).toBe(" ")
   })
 })

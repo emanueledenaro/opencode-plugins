@@ -1,7 +1,7 @@
 // The renderer and its registration, with the OpenTUI classes passed in. That keeps this file free of
 // OpenTUI imports, so the fallbacks and the unregister logic are tested with plain fakes (see the test file).
 // ./tui.ts is the only place that hands in the real classes.
-import { colourFor, rowText, statoLines, type StatoTheme } from "./stato-core.ts"
+import { colourFor, lineText, statoLines, type StatoTheme } from "./stato-core.ts"
 
 export const LANGUAGE = "stato"
 
@@ -31,7 +31,7 @@ export function createStatoRenderer(deps: RenderDeps) {
       // The theme is read on every call, so a theme change shows in the next render.
       const theme = deps.theme()
       box = deps.makeBox()
-      for (const line of lines) box.add(deps.makeText(rowText(line.text), colourFor(line.kind, theme)))
+      for (const line of lines) box.add(deps.makeText(lineText(line), colourFor(line.kind, theme)))
       return box
     } catch {
       try {
