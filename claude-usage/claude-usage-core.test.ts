@@ -583,18 +583,20 @@ describe("footerLayout with Fable", () => {
     expect(ROW(footerLayout({ five: 23, week: 96, stale: false }, 80))).toBe(FULL)
     expect(ROW(footerLayout({ ...all, fable: null }, 80))).toBe(FULL)
   })
-  test("Fable goes first: the other two keep full bars until Fable is gone", () => {
+  test("Fable stays: the bars get shorter first, then text only, and Fable goes last", () => {
     expect(ROW(footerLayout(all, 50))).toBe(`${FULL}   fable ▰▱▱▱▱▱ 12%`)
-    expect(ROW(footerLayout(all, 49))).toBe(FULL)
-    expect(ROW(footerLayout(all, 31))).toBe(FULL)
-    expect(ROW(footerLayout(all, 30))).toBe("5h ▰▱▱▱▱ 23%  sett ▰▰▰▰▰ 96%")
+    expect(ROW(footerLayout(all, 49))).toBe("5h ▰▱▱▱▱ 23%  sett ▰▰▰▰▰ 96%  fable ▰▱▱▱▱ 12%")
+    expect(ROW(footerLayout(all, 44))).toBe("5h ▰▱▱▱ 23%  sett ▰▰▰▰ 96%  fable ▱▱▱▱ 12%")
+    expect(ROW(footerLayout(all, 41))).toBe("5h ▰▱▱ 23%  sett ▰▰▰ 96%  fable ▱▱▱ 12%")
+    expect(ROW(footerLayout(all, 38))).toBe("5h 23% sett 96% fable 12%")
+    expect(ROW(footerLayout(all, 25))).toBe("5h 23% sett 96% fable 12%")
+    expect(ROW(footerLayout(all, 24))).toBe("5h 23% sett 96%")
   })
-  test("the old marker goes before Fable does", () => {
+  test("the old marker goes before anything else", () => {
     const stale = { ...all, stale: true }
     expect(ROW(footerLayout(stale, 61))).toBe(`${FULL}   fable ▰▱▱▱▱▱ 12%  (vecchio)`)
-    expect(ROW(footerLayout(stale, 55))).toBe(`${FULL}   fable ▰▱▱▱▱▱ 12%`)
-    expect(ROW(footerLayout(stale, 49))).toBe(`${FULL}  (vecchio)`) // Fable gone, marker fits again
-    expect(ROW(footerLayout(stale, 41))).toBe(FULL)
+    expect(ROW(footerLayout(stale, 60))).toBe(`${FULL}   fable ▰▱▱▱▱▱ 12%`)
+    expect(ROW(footerLayout(stale, 49))).toBe("5h ▰▱▱▱▱ 23%  sett ▰▰▰▰▰ 96%  fable ▰▱▱▱▱ 12%")
   })
   test("never wider than the budget, never reordered, at every budget", () => {
     let last = Infinity
