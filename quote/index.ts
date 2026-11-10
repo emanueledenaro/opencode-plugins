@@ -1,5 +1,5 @@
 // Server part of the quote plugin. One "prompt" hook: when the TUI left a pending quote for the
-// session, it is attached to the message as a file named "Citazione" and the pending file is consumed.
+// session, each quote is attached as its own file ("Citazione", or "Citazione 1".."5") and the file is consumed.
 // All the logic is in ./quote-core.ts (tested); the hook never throws and never blocks admission.
 import { Plugin } from "@opencode/plugin"
 import { applyQuoteToPrompt } from "./quote-core.ts"
