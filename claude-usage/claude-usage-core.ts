@@ -522,20 +522,20 @@ function build(input: FooterInput, cells: number, gap: number, marker: boolean, 
 
 /**
  * The footer item for `budget` columns. It tries, in order: full meters with the old marker, full meters,
- * the same without the Fable meter (it goes first, before any bar gets shorter), shorter and shorter
- * bars, text only ("5h 23% sett 96%"), the one window that matters most, and finally nothing (null).
- * It never returns something wider than the budget.
+ * shorter and shorter bars, text only ("5h 23% sett 96% fable 12%"), all of these with the Fable meter
+ * when there is one; then text only without Fable, the one window that matters most, and finally
+ * nothing (null). Fable stays as long as the text-only row fits, because it is the number that decides
+ * whether agents may use Fable. It never returns something wider than the budget.
  */
 export function footerLayout(input: FooterInput, budget: number): FooterLayout | null {
   const room = Number.isNaN(budget) ? Infinity : budget
   const attempts: [number, number, boolean, boolean][] = [
     [FOOTER_MAX_CELLS, 3, true, true],
     [FOOTER_MAX_CELLS, 3, false, true],
-    [FOOTER_MAX_CELLS, 3, true, false],
-    [FOOTER_MAX_CELLS, 3, false, false],
-    [5, 2, false, false],
-    [4, 2, false, false],
-    [3, 2, false, false],
+    [5, 2, false, true],
+    [4, 2, false, true],
+    [3, 2, false, true],
+    [0, 1, false, true],
     [0, 1, false, false],
   ]
   for (const [cells, gap, marker, withFable] of attempts) {
