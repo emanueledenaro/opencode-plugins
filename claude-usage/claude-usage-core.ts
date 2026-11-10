@@ -6,12 +6,16 @@ export const POLL_INTERVAL_MS = 5 * 60_000
 export const MAX_BACKOFF_MS = 60 * 60_000
 export const MIN_MANUAL_GAP_MS = 30_000
 export const WEEKLY_THRESHOLD_PERCENT = 90 // red and a toast above this weekly percentage
+export const FABLE_WARN_PERCENT = 50 // the Fable meter turns yellow from here
+export const FABLE_STOP_PERCENT = 80 // red and a toast from here: agents must stop using Fable
 
 export type UsageWindow = { percent: number; resetsAt: number | null }
 export type UsageSnapshot = {
   fetchedAt: number
   fiveHour: UsageWindow | null
   sevenDay: UsageWindow | null
+  // The separate weekly Fable limit (Max and Ultra plans). null = not reported, never an error.
+  fable: UsageWindow | null
 }
 
 export type FailureKind =
@@ -53,6 +57,10 @@ export function parseCredentials(raw: string, now: number): Credentials {
 function toWindow(raw: unknown): UsageWindow | null {
   if (typeof raw !== "object" || raw === null) return null
   const { utilization, resets_at } = raw as { utilization?: unknown; resets_at?: unknown }
+  return makeWindow(utilization, resets_at)
+}
+
+function makeWindow(utilization: unknown, resets_at: unknown): UsageWindow | null {
   if (typeof utilization !== "number" || !Number.isFinite(utilization)) return null
   let resetsAt: number | null = null
   if (typeof resets_at === "string") {
@@ -64,20 +72,72 @@ function toWindow(raw: unknown): UsageWindow | null {
   return { percent: Math.max(0, utilization), resetsAt }
 }
 
+// The Fable weekly limit is an entry of `limits` (undocumented):
+//   { kind: "weekly_scoped", percent: 2, resets_at: "...", scope: { model: { display_name: "Fable" } } }
+// `percent` is the share of the Fable limit itself (0 to 100), not of the whole week.
+// If several valid Fable entries exist, the one with the highest percent wins.
+function parseFable(limits: unknown): UsageWindow | null {
+  if (!Array.isArray(limits)) return null
+  let best: UsageWindow | null = null
+  for (const entry of limits) {
+    if (typeof entry !== "object" || entry === null) continue
+    const { kind, percent, resets_at, scope } = entry as {
+      kind?: unknown
+      percent?: unknown
+      resets_at?: unknown
+      scope?: { model?: { display_name?: unknown } | null } | null
+    }
+    const name = scope?.model?.display_name
+    if (kind !== "weekly_scoped" || typeof name !== "string" || name.trim().toLowerCase() !== "fable") continue
+    const window = makeWindow(percent, resets_at)
+    if (window && (best === null || window.percent > best.percent)) best = window
+  }
+  return best
+}
+
 // Response of GET /api/oauth/usage (undocumented). Returns null when neither window is present.
 export function parseUsage(body: unknown, now: number): UsageSnapshot | null {
   if (typeof body !== "object" || body === null) return null
-  const { five_hour, seven_day } = body as { five_hour?: unknown; seven_day?: unknown }
+  const { five_hour, seven_day, limits } = body as { five_hour?: unknown; seven_day?: unknown; limits?: unknown }
   const fiveHour = toWindow(five_hour)
   const sevenDay = toWindow(seven_day)
   if (!fiveHour && !sevenDay) return null
-  return { fetchedAt: now, fiveHour, sevenDay }
+  return { fetchedAt: now, fiveHour, sevenDay, fable: parseFable(limits) }
 }
 
 // --- thresholds and formatting -------------------------------------------------------------
 
 export function weeklyOverThreshold(snapshot: UsageSnapshot | null): boolean {
   return (snapshot?.sevenDay?.percent ?? 0) > WEEKLY_THRESHOLD_PERCENT
+}
+
+// From 80% the agents must stop using Fable.
+export function fableOverThreshold(snapshot: UsageSnapshot | null): boolean {
+  return (snapshot?.fable?.percent ?? 0) >= FABLE_STOP_PERCENT
+}
+
+/** True when the numbers were fetched at or after `startedAt`, not just read from the cache file. */
+export function isFreshSnapshot(snapshot: UsageSnapshot | null, startedAt: number): boolean {
+  return snapshot !== null && snapshot.fetchedAt >= startedAt
+}
+
+export const FABLE_TOAST = `Fable all'${FABLE_STOP_PERCENT}% settimanale: niente più Fable per gli agenti`
+
+/**
+ * Says true once each time Fable goes from under the stop line to over it, and again only after it
+ * has gone back under (a new week). Starts as "under", so a first reading already over also fires once.
+ * A reading with no Fable entry says nothing and keeps what it knew, so a poll that lacks the entry
+ * does not make the next one look like a new crossing.
+ */
+export function createFableWatch() {
+  let wasOver = false
+  return (snapshot: UsageSnapshot | null): boolean => {
+    if (snapshot?.fable == null) return false
+    const over = fableOverThreshold(snapshot)
+    const crossed = over && !wasOver
+    wasOver = over
+    return crossed
+  }
 }
 
 export function formatPercent(percent: number): string {
@@ -218,7 +278,7 @@ export function parseCache(text: string): CacheFile | null {
     if (raw.version !== 1) return null
     const nextAllowedAt = typeof raw.nextAllowedAt === "number" ? raw.nextAllowedAt : 0
     if (raw.snapshot === null) return { version: 1, snapshot: null, nextAllowedAt }
-    const snap = raw.snapshot as { fetchedAt?: unknown; fiveHour?: unknown; sevenDay?: unknown }
+    const snap = raw.snapshot as { fetchedAt?: unknown; fiveHour?: unknown; sevenDay?: unknown; fable?: unknown }
     if (typeof snap?.fetchedAt !== "number") return null
     return {
       version: 1,
@@ -226,6 +286,7 @@ export function parseCache(text: string): CacheFile | null {
         fetchedAt: snap.fetchedAt,
         fiveHour: validWindow(snap.fiveHour),
         sevenDay: validWindow(snap.sevenDay),
+        fable: validWindow(snap.fable), // old cache files have no fable field: null
       },
       nextAllowedAt,
     }
@@ -359,6 +420,13 @@ export function usageLevel(percent: number): Level {
   return "ok"
 }
 
+// Fable has its own lines: green under 50%, yellow from 50%, red from 80%.
+export function fableLevel(percent: number): Level {
+  if (percent >= FABLE_STOP_PERCENT) return "high"
+  if (percent >= FABLE_WARN_PERCENT) return "warn"
+  return "ok"
+}
+
 // A bar of `cells` cells: how many are filled and how many are empty.
 export function meter(percent: number, cells: number): { filled: string; empty: string } {
   const clamped = Math.min(100, Math.max(0, percent))
@@ -417,7 +485,12 @@ const DIALOG_RESERVED = DIALOG_LABEL_WIDTH + 6 // label, then "  " and a 4 chara
 const STALE_MARKER = "  (vecchio)"
 export const RESIZE_COALESCE_MS = 50
 
-export type FooterPart = { window: "five" | "week"; label: "5h" | "sett"; percent: number | null; cells: number }
+export type FooterPart = {
+  window: "five" | "week" | "fable"
+  label: "5h" | "sett" | "fable"
+  percent: number | null
+  cells: number
+}
 export type FooterLayout = { parts: FooterPart[]; gap: number; marker: boolean; width: number }
 
 const partText = (part: FooterPart): string => {
@@ -433,13 +506,15 @@ export function footerText(layout: FooterLayout): string {
   return layout.parts.map(partText).join(" ".repeat(layout.gap)) + (layout.marker ? STALE_MARKER : "")
 }
 
-type FooterInput = { five: number | null; week: number | null; stale: boolean }
+// `fable` is optional: absent or null means the plan reports no Fable limit, and the meter is not drawn.
+type FooterInput = { five: number | null; week: number | null; stale: boolean; fable?: number | null }
 
-function build(input: FooterInput, cells: number, gap: number, marker: boolean): FooterLayout {
+function build(input: FooterInput, cells: number, gap: number, marker: boolean, withFable: boolean): FooterLayout {
   const parts: FooterPart[] = [
     { window: "five", label: "5h", percent: input.five, cells },
     { window: "week", label: "sett", percent: input.week, cells },
   ]
+  if (withFable && input.fable != null) parts.push({ window: "fable", label: "fable", percent: input.fable, cells })
   const layout: FooterLayout = { parts, gap, marker: marker && input.stale, width: 0 }
   layout.width = footerText(layout).length
   return layout
@@ -447,21 +522,24 @@ function build(input: FooterInput, cells: number, gap: number, marker: boolean):
 
 /**
  * The footer item for `budget` columns. It tries, in order: full meters with the old marker, full meters,
- * shorter and shorter bars, text only ("5h 23% sett 96%"), the one window that matters most, and
- * finally nothing (null). It never returns something wider than the budget.
+ * the same without the Fable meter (it goes first, before any bar gets shorter), shorter and shorter
+ * bars, text only ("5h 23% sett 96%"), the one window that matters most, and finally nothing (null).
+ * It never returns something wider than the budget.
  */
 export function footerLayout(input: FooterInput, budget: number): FooterLayout | null {
   const room = Number.isNaN(budget) ? Infinity : budget
-  const attempts: [number, number, boolean][] = [
-    [FOOTER_MAX_CELLS, 3, true],
-    [FOOTER_MAX_CELLS, 3, false],
-    [5, 2, false],
-    [4, 2, false],
-    [3, 2, false],
-    [0, 1, false],
+  const attempts: [number, number, boolean, boolean][] = [
+    [FOOTER_MAX_CELLS, 3, true, true],
+    [FOOTER_MAX_CELLS, 3, false, true],
+    [FOOTER_MAX_CELLS, 3, true, false],
+    [FOOTER_MAX_CELLS, 3, false, false],
+    [5, 2, false, false],
+    [4, 2, false, false],
+    [3, 2, false, false],
+    [0, 1, false, false],
   ]
-  for (const [cells, gap, marker] of attempts) {
-    const layout = build(input, cells, gap, marker)
+  for (const [cells, gap, marker, withFable] of attempts) {
+    const layout = build(input, cells, gap, marker, withFable)
     if (layout.width <= room) return layout
   }
   const present = (["five", "week"] as const)

@@ -1,15 +1,19 @@
 // TUI part of the claude-usage plugin (OpenCode 2 plugin API, docs: /build/plugins/cli).
-// Shows Claude subscription usage (5-hour and weekly window) in the prompt footer as two small
-// coloured meters, plus a /claude-usage dialog. Read only: see ./README.md and ./claude-usage.ts.
+// Shows Claude subscription usage (5-hour and weekly window, plus the weekly Fable limit when the
+// plan has one) in the prompt footer as small coloured meters, plus a /claude-usage dialog. Read only: see ./README.md and ./claude-usage.ts.
 import { Plugin } from "@opencode/plugin/tui"
 import { ErrorBoundary, For, Match, Show, Switch, createMemo, createSignal, onCleanup } from "solid-js"
 import {
+  FABLE_TOAST,
   POLL_INTERVAL_MS,
   WEEKLY_THRESHOLD_PERCENT,
+  createFableWatch,
   createWidthTracker,
   dialogLayout,
   failureIt,
+  fableLevel,
   fitText,
+  isFreshSnapshot,
   footerLayout,
   footerMessage,
   formatPercent,
@@ -59,6 +63,9 @@ export default Plugin.define({
   async setup(context) {
     if (isDisabled()) return
 
+    // A toast is only for numbers fetched in this session: cached numbers shown after a /reload or in a
+    // new window must not repeat a warning that was already given.
+    const startedAt = Date.now()
     const theme = context.theme
     const colour = (level: Level) =>
       level === "high"
@@ -72,10 +79,17 @@ export default Plugin.define({
     const [now, setNow] = createSignal(Date.now())
 
     let warned = false
+    const fableCrossed = createFableWatch()
     const stopListening = monitor.subscribe((next) => {
       setState(next)
+      const fresh = isFreshSnapshot(next.snapshot, startedAt)
+      // The watches always run so they track the state; only fresh numbers may show a toast.
+      const fableNow = fableCrossed(next.snapshot)
+      if (fableNow && fresh) {
+        context.ui.toast.show({ title: "Abbonamento Claude", message: FABLE_TOAST, variant: "warning", duration: 8000 })
+      }
       const over = weeklyOverThreshold(next.snapshot)
-      if (over && !warned && next.snapshot?.sevenDay) {
+      if (over && !warned && fresh && next.snapshot?.sevenDay) {
         context.ui.toast.show({
           title: "Abbonamento Claude",
           message: `Settimana al ${formatPercent(next.snapshot.sevenDay.percent)}: sei nella riserva del ${100 - WEEKLY_THRESHOLD_PERCENT}%.`,
@@ -101,7 +115,8 @@ export default Plugin.define({
       }
       const fg = () => {
         const value = percent()
-        return value === null ? theme.text.faint : colour(usageLevel(value))
+        if (value === null) return theme.text.faint
+        return colour(props.part.window === "fable" ? fableLevel(value) : usageLevel(value))
       }
       return (
         <box flexDirection="row" flexShrink={0}>
@@ -170,6 +185,7 @@ export default Plugin.define({
           {
             five: state().snapshot?.fiveHour?.percent ?? null,
             week: state().snapshot?.sevenDay?.percent ?? null,
+            fable: state().snapshot?.fable?.percent ?? null,
             stale: state().failure !== null,
           },
           budget(),
@@ -236,7 +252,13 @@ export default Plugin.define({
 
     // One row of the dialog: label, meter, percentage, then the reset line underneath. The meter and
     // the reset line follow the width of the dialog.
-    const DialogRow = (props: { label: string; window: UsageWindow | null; cells: number; inner: number }) => {
+    const DialogRow = (props: {
+      label: string
+      window: UsageWindow | null
+      cells: number
+      inner: number
+      level?: (percent: number) => Level
+    }) => {
       const pad = () => dialogLayout(props.inner).labelWidth
       return (
         <box flexDirection="column" paddingBottom={1}>
@@ -245,7 +267,7 @@ export default Plugin.define({
             <Show when={props.window} fallback={<text fg={theme.text.faint} wrapMode="none">{fitText("nessuna finestra attiva", Math.max(1, props.inner - pad()))}</text>}>
               {(window) => {
                 const bar = () => meter(window().percent, props.cells)
-                const fg = () => colour(usageLevel(window().percent))
+                const fg = () => colour((props.level ?? usageLevel)(window().percent))
                 return (
                   <box flexDirection="row" flexShrink={0}>
                     <Show when={bar().filled.length > 0}>
@@ -302,6 +324,9 @@ export default Plugin.define({
               <box flexDirection="column">
                 <DialogRow label="5 ore" window={snap().fiveHour} cells={cells()} inner={inner()} />
                 <DialogRow label="Settimana" window={snap().sevenDay} cells={cells()} inner={inner()} />
+                <Show when={snap().fable}>
+                  {(fable) => <DialogRow label="Fable" window={fable()} cells={cells()} inner={inner()} level={fableLevel} />}
+                </Show>
                 <Show when={weeklyOverThreshold(snap())}>
                   <text fg={(theme.text.feedback?.error?.base ?? theme.text.base)}>
                     {`Sopra il ${WEEKLY_THRESHOLD_PERCENT}%: stai usando la riserva del ${100 - WEEKLY_THRESHOLD_PERCENT}%.`}

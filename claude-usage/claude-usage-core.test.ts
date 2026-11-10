@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import {
   usageLevel,
+  fableLevel,
+  fableOverThreshold,
+  createFableWatch,
+  isFreshSnapshot,
+  FABLE_TOAST,
   meter,
   footerLayout,
   footerText,
@@ -85,6 +90,123 @@ describe("parseUsage", () => {
   })
 })
 
+// The shape found in the real response: limits[] has a weekly_scoped entry for the Fable model.
+const fableEntry = (percent: unknown, extra: Record<string, unknown> = {}) => ({
+  kind: "weekly_scoped",
+  group: "weekly",
+  percent,
+  severity: "normal",
+  resets_at: "2026-11-16T23:59:59.8+00:00",
+  scope: { model: { id: null, display_name: "Fable" }, surface: null },
+  is_active: false,
+  ...extra,
+})
+const withLimits = (limits: unknown) => ({ ...usageBody(10, 20), limits })
+
+describe("parseUsage: Fable weekly limit", () => {
+  test("reads percent and reset time from the weekly_scoped Fable entry", () => {
+    const limits = [{ kind: "weekly_all", percent: 20, scope: null, resets_at: "2026-11-12T09:00:00+00:00" }, fableEntry(12)]
+    expect(parseUsage(withLimits(limits), NOW)?.fable).toEqual({ percent: 12, resetsAt: Date.parse("2026-11-16T23:59:59.8Z") })
+  })
+  test("absent: no limits field, an empty list or no Fable entry all give null, never a failure", () => {
+    expect(parseUsage(usageBody(10, 20), NOW)?.fable).toBeNull()
+    expect(parseUsage(withLimits([]), NOW)?.fable).toBeNull()
+    expect(parseUsage(withLimits([{ kind: "weekly_all", percent: 20, scope: null }]), NOW)?.fable).toBeNull()
+    expect(parseUsage(withLimits([fableEntry(5, { scope: { model: { display_name: "Opus" } } })]), NOW)?.fable).toBeNull()
+    expect(parseUsage(withLimits([fableEntry(5, { kind: "weekly_all" })]), NOW)?.fable).toBeNull()
+  })
+  test("malformed: wrong types give null and leave the other windows intact", () => {
+    for (const limits of ["x", 7, {}, [null], [3], [fableEntry("12")], [fableEntry(null)], [fableEntry(Number.NaN)], [fableEntry(5, { scope: null })]]) {
+      const snapshot = parseUsage(withLimits(limits), NOW)
+      expect(snapshot?.fable).toBeNull()
+      expect(snapshot?.sevenDay?.percent).toBe(20)
+    }
+  })
+  test("the name must be Fable: spaces and case are ignored, other names are not", () => {
+    const named = (display_name: string) => parseUsage(withLimits([fableEntry(9, { scope: { model: { display_name } } })]), NOW)?.fable
+    expect(named("  FABLE ")?.percent).toBe(9)
+    expect(named("fable")?.percent).toBe(9)
+    expect(named("Not Fable")).toBeNull()
+    expect(named("Fableish")).toBeNull()
+    expect(named("")).toBeNull()
+  })
+  test("with several valid Fable entries the highest percent wins, in any order", () => {
+    expect(parseUsage(withLimits([fableEntry(10), fableEntry(70), fableEntry(30)]), NOW)?.fable?.percent).toBe(70)
+    expect(parseUsage(withLimits([fableEntry(70), fableEntry(10)]), NOW)?.fable?.percent).toBe(70)
+    expect(parseUsage(withLimits([fableEntry(10), fableEntry("bad"), fableEntry(20)]), NOW)?.fable?.percent).toBe(20)
+  })
+  test("a broken entry does not hide a good one after it", () => {
+    expect(parseUsage(withLimits([fableEntry("bad"), fableEntry(33)]), NOW)?.fable?.percent).toBe(33)
+  })
+  test("the Fable limit alone does not make a snapshot", () => {
+    expect(parseUsage({ limits: [fableEntry(50)] }, NOW)).toBeNull()
+  })
+})
+
+describe("Fable thresholds", () => {
+  test("green under 50%, yellow from 50%, red from 80%", () => {
+    expect(fableLevel(0)).toBe("ok")
+    expect(fableLevel(49.9)).toBe("ok")
+    expect(fableLevel(50)).toBe("warn")
+    expect(fableLevel(79.9)).toBe("warn")
+    expect(fableLevel(80)).toBe("high")
+    expect(fableLevel(100)).toBe("high")
+  })
+  test("the stop line is 80% included", () => {
+    const at = (percent: number) => parseUsage(withLimits([fableEntry(percent)]), NOW)
+    expect(fableOverThreshold(at(79.9))).toBe(false)
+    expect(fableOverThreshold(at(80))).toBe(true)
+    expect(fableOverThreshold(at(120))).toBe(true)
+    expect(fableOverThreshold(parseUsage(usageBody(1, 2), NOW))).toBe(false)
+    expect(fableOverThreshold(null)).toBe(false)
+  })
+})
+
+describe("Fable toast", () => {
+  const at = (percent: number | null) =>
+    parseUsage(percent === null ? usageBody(1, 2) : withLimits([fableEntry(percent)]), NOW)
+  test("fires once when Fable crosses 80%, not before and not again while it stays over", () => {
+    const crossed = createFableWatch()
+    expect(crossed(at(10))).toBe(false)
+    expect(crossed(at(79))).toBe(false)
+    expect(crossed(at(80))).toBe(true)
+    expect(crossed(at(85))).toBe(false)
+    expect(crossed(at(100))).toBe(false)
+  })
+  test("fires again after a drop under the line (a new week)", () => {
+    const crossed = createFableWatch()
+    expect(crossed(at(90))).toBe(true)
+    expect(crossed(at(2))).toBe(false)
+    expect(crossed(at(81))).toBe(true)
+  })
+  test("a missing Fable reading or no data never fires", () => {
+    const crossed = createFableWatch()
+    expect(crossed(at(null))).toBe(false)
+    expect(crossed(null)).toBe(false)
+  })
+  test("a poll without the Fable entry does not re-arm the toast", () => {
+    const crossed = createFableWatch()
+    expect(crossed(at(90))).toBe(true)
+    expect(crossed(at(null))).toBe(false)
+    expect(crossed(null)).toBe(false)
+    expect(crossed(at(90))).toBe(false) // still the same crossing
+    expect(crossed(at(5))).toBe(false)
+    expect(crossed(at(null))).toBe(false)
+    expect(crossed(at(90))).toBe(true) // a real drop and a new crossing
+  })
+  test("cached numbers are not fresh, numbers fetched in this session are", () => {
+    const started = NOW + 1000
+    expect(isFreshSnapshot(parseUsage(usageBody(1, 2), NOW), started)).toBe(false) // read from the cache file
+    expect(isFreshSnapshot(parseUsage(usageBody(1, 2), started - 1), started)).toBe(false)
+    expect(isFreshSnapshot(parseUsage(usageBody(1, 2), started), started)).toBe(true)
+    expect(isFreshSnapshot(parseUsage(usageBody(1, 2), started + 5000), started)).toBe(true)
+    expect(isFreshSnapshot(null, started)).toBe(false)
+  })
+  test("the text is Italian and names the line", () => {
+    expect(FABLE_TOAST).toBe("Fable all'80% settimanale: niente più Fable per gli agenti")
+  })
+})
+
 describe("weekly threshold", () => {
   const week = (percent: number) => parseUsage(usageBody(1, percent), NOW)
   test("90% exactly is inside the reserve, above 90% is not", () => {
@@ -155,6 +277,24 @@ describe("cache", () => {
     const state = { snapshot: parseUsage(usageBody(10, 20), NOW), nextAllowedAt: NOW + 1 }
     const text = serializeCache(state)
     expect(parseCache(text)).toEqual({ version: 1, ...state })
+  })
+  test("round-trips the Fable window", () => {
+    const state = { snapshot: parseUsage(withLimits([fableEntry(12)]), NOW), nextAllowedAt: NOW + 1 }
+    expect(parseCache(serializeCache(state))?.snapshot?.fable).toEqual({ percent: 12, resetsAt: Date.parse("2026-11-16T23:59:59.8Z") })
+  })
+  test("old cache files without a fable field still load, with Fable null", () => {
+    const old = JSON.stringify({
+      version: 1,
+      snapshot: { fetchedAt: NOW, fiveHour: { percent: 1, resetsAt: null }, sevenDay: { percent: 2, resetsAt: null } },
+      nextAllowedAt: 0,
+    })
+    const loaded = parseCache(old)
+    expect(loaded?.snapshot?.sevenDay?.percent).toBe(2)
+    expect(loaded?.snapshot?.fable).toBeNull()
+  })
+  test("a malformed fable field in the cache becomes null, not a rejected file", () => {
+    const bad = JSON.stringify({ version: 1, snapshot: { fetchedAt: NOW, fiveHour: null, sevenDay: null, fable: { percent: "x" } }, nextAllowedAt: 0 })
+    expect(parseCache(bad)?.snapshot?.fable).toBeNull()
   })
   test("rejects other versions and garbage", () => {
     expect(parseCache('{"version":2}')).toBeNull()
@@ -426,6 +566,44 @@ describe("footerLayout", () => {
 
   test("a budget that is not a number counts as no limit", () => {
     expect(ROW(footerLayout(both, Number.NaN))).toBe("5h ▰▱▱▱▱▱ 23%   sett ▰▰▰▰▰▰ 96%")
+  })
+})
+
+describe("footerLayout with Fable", () => {
+  const all = { five: 23, week: 96, fable: 12, stale: false }
+  const FULL = "5h ▰▱▱▱▱▱ 23%   sett ▰▰▰▰▰▰ 96%"
+
+  test("a third meter after sett, same bar style", () => {
+    const layout = footerLayout(all, 80)!
+    expect(footerText(layout)).toBe(`${FULL}   fable ▰▱▱▱▱▱ 12%`)
+    expect(layout.parts.map((part) => part.window)).toEqual(["five", "week", "fable"])
+    expect(layout.width).toBe(50)
+  })
+  test("no Fable reading (absent or null) means no third meter", () => {
+    expect(ROW(footerLayout({ five: 23, week: 96, stale: false }, 80))).toBe(FULL)
+    expect(ROW(footerLayout({ ...all, fable: null }, 80))).toBe(FULL)
+  })
+  test("Fable goes first: the other two keep full bars until Fable is gone", () => {
+    expect(ROW(footerLayout(all, 50))).toBe(`${FULL}   fable ▰▱▱▱▱▱ 12%`)
+    expect(ROW(footerLayout(all, 49))).toBe(FULL)
+    expect(ROW(footerLayout(all, 31))).toBe(FULL)
+    expect(ROW(footerLayout(all, 30))).toBe("5h ▰▱▱▱▱ 23%  sett ▰▰▰▰▰ 96%")
+  })
+  test("the old marker goes before Fable does", () => {
+    const stale = { ...all, stale: true }
+    expect(ROW(footerLayout(stale, 61))).toBe(`${FULL}   fable ▰▱▱▱▱▱ 12%  (vecchio)`)
+    expect(ROW(footerLayout(stale, 55))).toBe(`${FULL}   fable ▰▱▱▱▱▱ 12%`)
+    expect(ROW(footerLayout(stale, 49))).toBe(`${FULL}  (vecchio)`) // Fable gone, marker fits again
+    expect(ROW(footerLayout(stale, 41))).toBe(FULL)
+  })
+  test("never wider than the budget, never reordered, at every budget", () => {
+    let last = Infinity
+    for (let budget = 70; budget >= 0; budget--) {
+      const layout = footerLayout({ five: 50, week: 50, fable: 85, stale: true }, budget)
+      if (layout) expect(layout.width).toBeLessThanOrEqual(budget)
+      expect(layout?.width ?? 0).toBeLessThanOrEqual(last)
+      last = layout?.width ?? 0
+    }
   })
 })
 
