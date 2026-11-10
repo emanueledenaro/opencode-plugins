@@ -4,6 +4,7 @@ An OpenCode 2 colour theme with the macOS system colours, in a dark and a light 
 
 - Text in a soft pearl white on dark, near black on light. Secondary text in Apple greys.
 - Apple blue as the main colour; Apple green, orange and red for success, warning and error.
+- Bold text in Apple orange, inline code in Apple cyan, so the one action and the keys to press stand out in a reply. Diff blocks show added lines green and removed lines red.
 - Transparent main background, so your terminal's background (and its blur, if it has one) shows through. Prompt box, sidebar and dialogs keep a solid grey, so the sections stay clearly visible.
 
 ## Install

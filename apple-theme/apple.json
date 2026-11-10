@@ -180,8 +180,8 @@
       "light": "llabel"
     },
     "markdownStrong": {
-      "dark": "label",
-      "light": "llabel"
+      "dark": "orange",
+      "light": "lorange"
     },
     "markdownHorizontalRule": {
       "dark": "separator",
