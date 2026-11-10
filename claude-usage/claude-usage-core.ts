@@ -567,6 +567,43 @@ export function footerLayout(input: FooterInput, budget: number): FooterLayout |
   return icon.width <= room ? icon : null
 }
 
+export type TextTone = "base" | "muted" | "faint"
+
+/**
+ * Hover look of a piece of footer text: one step brighter while the mouse is over the item
+ * (faint to muted, muted to base, base stays). The colours of the levels (green, yellow, red) are
+ * never passed through here: they carry a meaning and do not change on hover.
+ */
+export function hoverTone(tone: TextTone, hovered: boolean): TextTone {
+  if (!hovered) return tone
+  return tone === "faint" ? "muted" : "base"
+}
+
+/**
+ * Whether the mouse is over the footer item. `enter` (the pointer is over the item) turns it on; `leave`
+ * (the pointer went elsewhere) and `reset` (a dialog opened, the terminal lost focus, the plugin stops)
+ * turn it off. `onChange` runs only when the value changes, so the out-then-over pair that OpenTUI
+ * sends when the pointer moves between two children of the item does not redraw twice. A terminal sends
+ * no event when the pointer leaves its window, so a highlight can stay until the next mouse event or a
+ * focus change.
+ */
+export function createHoverGate(onChange: (hovered: boolean) => void) {
+  let hovered = false
+  const set = (next: boolean) => {
+    if (next === hovered) return
+    hovered = next
+    onChange(next)
+  }
+  return {
+    enter: () => set(true),
+    leave: () => set(false),
+    reset: () => set(false),
+    get hovered() {
+      return hovered
+    },
+  }
+}
+
 export type MousePoint = { button?: number; x?: number; y?: number }
 
 /**

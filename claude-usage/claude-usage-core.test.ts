@@ -11,6 +11,8 @@ import {
   footerText,
   iconTone,
   createClickGate,
+  createHoverGate,
+  hoverTone,
   FOOTER_ICON,
   dialogLayout,
   fitText,
@@ -915,5 +917,80 @@ describe("resetFit", () => {
   test("texts without a clock are cut, never longer than the width", () => {
     expect(resetFit({ percent: 1, resetsAt: null }, now, 10)).toBe("azzeramen…")
     for (let width = 1; width < 50; width++) expect([...resetFit(window, now, width)].length).toBeLessThanOrEqual(width)
+  })
+})
+
+describe("hoverTone", () => {
+  test("without hover every tone is unchanged", () => {
+    expect(hoverTone("faint", false)).toBe("faint")
+    expect(hoverTone("muted", false)).toBe("muted")
+    expect(hoverTone("base", false)).toBe("base")
+  })
+  test("with hover every tone is one step brighter and base stays base", () => {
+    expect(hoverTone("faint", true)).toBe("muted")
+    expect(hoverTone("muted", true)).toBe("base")
+    expect(hoverTone("base", true)).toBe("base")
+  })
+})
+
+describe("createHoverGate", () => {
+  const make = () => {
+    const seen: boolean[] = []
+    return { gate: createHoverGate((hovered) => seen.push(hovered)), seen }
+  }
+
+  test("starts not hovered and says nothing", () => {
+    const { gate, seen } = make()
+    expect(gate.hovered).toBe(false)
+    expect(seen).toEqual([])
+  })
+  test("enter turns it on, leave turns it off", () => {
+    const { gate, seen } = make()
+    gate.enter()
+    expect(gate.hovered).toBe(true)
+    gate.leave()
+    expect(gate.hovered).toBe(false)
+    expect(seen).toEqual([true, false])
+  })
+  test("reset turns it off (dialog opened, terminal blurred)", () => {
+    const { gate, seen } = make()
+    gate.enter()
+    gate.reset()
+    expect(gate.hovered).toBe(false)
+    expect(seen).toEqual([true, false])
+  })
+  test("repeated enters, leaves and resets report nothing new", () => {
+    const { gate, seen } = make()
+    gate.leave()
+    gate.reset()
+    gate.enter()
+    gate.enter()
+    gate.enter()
+    expect(seen).toEqual([true])
+    gate.leave()
+    gate.leave()
+    gate.reset()
+    expect(seen).toEqual([true, false])
+  })
+  test("moving between two children (out then over) ends hovered", () => {
+    const { gate } = make()
+    gate.enter()
+    gate.leave()
+    gate.enter()
+    expect(gate.hovered).toBe(true)
+  })
+  test("it can turn on again after a reset (pointer moves over the item again)", () => {
+    const { gate, seen } = make()
+    gate.enter()
+    gate.reset()
+    gate.enter()
+    expect(seen).toEqual([true, false, true])
+  })
+  test("two gates are independent (home and session footers)", () => {
+    const a = make()
+    const b = make()
+    a.gate.enter()
+    expect(b.gate.hovered).toBe(false)
+    expect(b.seen).toEqual([])
   })
 })
