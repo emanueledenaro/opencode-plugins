@@ -4,25 +4,32 @@ A read-only OpenCode 2 plugin that lists the background subagents (child session
 
 ## What you see
 
-Under the other sidebar blocks, only when the session has child sessions:
+Under the other sidebar blocks, always. The interface text is in Italian.
 
 ```
-Subagenti, 2 in corso
-Cerca i test rotti
-  in corso, da 3 min
-Serve un permesso
-  in attesa di permesso, da 40 s
-Compito breve
-  finito, 12 s fa
-Prova che fallisce
-  errore, 2 min fa
+SUBAGENTI                           3
+
+⚠ Ti aspetta
+  Opus     rilettura #103         2m
+           └ chiede un permesso
+
+⠹ Al lavoro
+  Sonnet   #90 allineamento      12m
+           └ make
+  Sonnet   citazioni              4m
+           └ bun
+
+✓ Finiti
+  Opus     rilettura plugin   3m fa
+✗ Sonnet   #103 correzioni   20m fa
 ```
 
-- Running agents first (newest start first), then the last 5 finished ones (newest end first). Every running or waiting agent is always shown.
-- States: `in corso`, `in attesa di permesso`, `in attesa di risposta` (a form or question), `finito`, `errore`, `fermato` (interrupted).
-- Time: `da 3 min` for something still running, `3 min fa` for something finished. It refreshes every 5 seconds.
-- Click a row to open that child session.
-- A child session with no title shows as `Subagente`.
+- Header: the number of agents that wait for you or work. Groups appear only when they have rows: `Ti aspetta` (a permission or a question is pending), `Al lavoro` (running, with a spinner), `Finiti` (the last 3; an error gets a red cross).
+- Each row: model (Opus, Sonnet, Haiku, Fable, else the first word of the model id) in a fixed colour per model, the task name cut with `…` to fit, and the time on the right. It refreshes every 5 seconds.
+- The line under a row: `chiede un permesso` or `ha una domanda` for a waiting agent, the latest tool call for a running one: the agent's short description of a shell call, or only the program name (`make`, `bun`), never the command line, which can hold a token; file tools show the file name; search tools show only their name.
+- At most 10 rows. Waiting and running agents come first and are never hidden by finished ones; if they alone are more than 10, a line `+N altri` counts the rest.
+- Click a row to open that child session. With no children the block shows `Nessun subagente`.
+- The text adapts to the sidebar width. Colours come from the active theme.
 
 ## Install
 
@@ -46,12 +53,13 @@ All of it is already in OpenCode's TUI data store, through the documented plugin
 
 - `data.session.family(sessionID)`, `get(id)` and `status(id)` give the child sessions, their title, `time.created`, `time.idle` and `running` or `idle`.
 - `data.session.permission.list(id)` and `form.list(id)` tell if a child is waiting for you.
-- The events `session.execution.started|succeeded|failed|interrupted` give exact start and end times and tell an error from a normal end. OpenCode itself keeps no "failed" state, only `running` and `idle`, so an error is known only for runs this TUI saw. A child that failed before this TUI started reads as `finito`.
+- The events `session.execution.started|succeeded|failed|interrupted` give exact start and end times and tell an error from a normal end. OpenCode itself keeps no "failed" state, only `running` and `idle`, so an error is known only for runs this TUI saw. A child that failed before this TUI started reads as finished.
+- `session.step.started` gives the model of a child, and `session.tool.input.started` plus `session.tool.called` give its latest tool call. No message of a child is ever read.
 
 ## Files
 
-- `agents-core.ts`: pure logic (rows, order, states, Italian times).
-- `tui.tsx`: the sidebar block and the event listeners. Cleans up its timer and listeners on reload.
+- `agents-core.ts`: pure logic (layout, alignment, truncation, groups, row cap, times).
+- `tui.tsx`: the sidebar block and the event listeners. One shared spinner timer that runs only while something works. Cleans up its timers and listeners on reload.
 - `index.ts`: an empty server part, so OpenCode loads the directory.
 - `agents-core.test.ts`: `bun test`.
 
