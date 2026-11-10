@@ -11,8 +11,9 @@ export type Turn = { role: "user" | "assistant"; text: string }
 
 // "Serve da te" at the start of a line, optionally wrapped in markdown (#, >, a bullet, **, __, `) and followed by ":".
 // Groups: 1 opener (** __ `), 2 closer before the colon, 3 the opener's own closer right after the colon (only if a
-// space or the end follows, so "Serve da te: **b** c" keeps its bold), 4 the text.
-const MARKER_LINE = /^[\s>#-]*(?:[*+]\s+)?(\*\*|__|`)?[*_`]*serve da te\s*([*_`]*)\s*:(\1(?=\s|$))?\s*(.*)$/i
+// space or the end follows, or when no other closer follows on the line, so "Serve da te: **b** c" keeps its bold
+// and "**Serve da te:**x" drops it), 4 the text.
+const MARKER_LINE = /^[\s>#-]*(?:[*+]\s+)?(\*\*|__|`)?[*_`]*serve da te\s*([*_`]*)\s*:(\1(?=\s|$)|\1(?!.*\1))?\s*(.*)$/i
 const LIST_ITEM = /^\s*(?:\d+[.)]|[-*+])\s+/
 
 export function stripMarkdown(text: string): string {

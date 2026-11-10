@@ -82,6 +82,9 @@ describe("bold around the marker line", () => {
   test("bold on the label only: text is kept as written", () => {
     expect(extractAsk("**Serve da te:** scegli A o B")).toBe("scegli A o B")
   })
+  test("bold on the label with no space after it", () => {
+    expect(extractAsk("**Serve da te:**scegli A o B")).toBe("scegli A o B")
+  })
   test("bold on the label with the colon outside, text ending in a bold word", () => {
     expect(extractAsk("**Serve da te**: scegli **A**")).toBe("scegli A")
   })
