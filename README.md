@@ -5,7 +5,12 @@ Small local plugins for OpenCode 2. Each folder is one plugin: point OpenCode at
 | Plugin | What it does |
 | --- | --- |
 | [claude-usage](claude-usage/) | Shows your Claude subscription usage (5-hour and weekly window) as coloured meters under the prompt, plus a `/claude-usage` dialog. Read only. |
+| [ask-box](ask-box/) | Keeps the assistant's last `Serve da te:` block visible in the sidebar until you answer. Read only. |
+| [plan-banner](plan-banner/) | Warns above the prompt when the assistant's last reply ran under the Plan agent. Read only. |
 | [quote](quote/) | Highlight text in the chat, press `ctrl+y`, and it is attached as a quote to your next message, with your comment underneath. Italian interface. |
+| [agents-panel](agents-panel/) | Sidebar list of the session's background subagents: title, state (running, finished, error, waiting for permission) and how long ago. Read only. |
+| [notify](notify/) | A notification and a short sound when the terminal is not focused and OpenCode finished a reply, asks a permission or waits for an answer. At most one per 20 s. |
+| [token-rate](token-rate/) | Shows the last reply's output speed (`42 tok/s`) beside the other footer items, and logs each measurement. |
 
 ## Install a plugin
 
@@ -24,6 +29,5 @@ OpenCode 2.2 loads only directories as plugins, and reloads only the files insid
 ## Tests
 
 ```sh
-cd claude-usage && bun test
-cd ../quote && bun test
+cd claude-usage && bun test   # same in agents-panel, ask-box, notify, plan-banner, quote, token-rate
 ```
