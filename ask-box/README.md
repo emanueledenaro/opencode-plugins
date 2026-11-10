@@ -4,7 +4,7 @@ A read-only OpenCode 2 plugin that keeps the last thing the assistant asked you 
 
 ## What you see
 
-When an assistant reply contains a line that starts with `Serve da te:` (optionally in bold, optionally followed by a numbered list), the sidebar shows a block titled `Serve da te` with that text: markdown removed, wrapped, at most 8 lines (a cut ends with `…`).
+When an assistant reply contains a line that starts with `Serve da te:` (optionally in bold, optionally followed by a numbered list), the sidebar shows a block titled `Serve da te` with that text: markdown removed, wrapped at the measured sidebar width, at most 8 lines in a normal sidebar and up to 12 in a very narrow one so the shown text stays about the same (a cut ends with `…`).
 
 The block disappears as soon as you send a new message after that reply. If the next reply has a new `Serve da te:` line, it shows again. The last `Serve da te:` in a reply wins. Text that comes after a blank line and is not a list is not part of the block.
 

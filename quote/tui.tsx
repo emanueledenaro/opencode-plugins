@@ -4,19 +4,22 @@
 // message as "Citazione 1", "Citazione 2", ...
 // The two parts talk through one file per session, see ./quote-core.ts and ./README.md.
 import { Plugin } from "@opencode/plugin/tui"
-import { ErrorBoundary, For, Show, createSignal, onMount } from "solid-js"
+import { ErrorBoundary, For, Show, createSignal, onCleanup, onMount } from "solid-js"
 import {
   MAX_QUOTES,
   addPending,
   clearPending,
+  createWidthTracker,
   dialogPreview,
+  hintLine,
   loadPending,
   normalizeSelection,
   pendingRoom,
   removePending,
-  rowSummary,
+  rowLayout,
   sameList,
   selectionFresh,
+  titleLine,
   type PendingQuote,
   type Selection,
 } from "./quote-core.ts"
@@ -33,6 +36,13 @@ const SEND_LABEL = IN_GHOSTTY ? "Cmd+Shift+S" : SEND_KEY
 const TOAST_MS = 5_000
 const TOAST_DELAY_MS = 700
 const SYNC_MS = 1_000
+// Width assumed for the first frame, before the box has been measured. The box has a border and one
+// column of padding on each side, so the text gets the width minus 4.
+const DEFAULT_WIDTH = 80
+const BOX_CHROME = 4
+
+// The one thing read from the OpenTUI box: its own width, as OpenCode's own footer does.
+type Measured = { width: number; onSizeChange?: (() => void) | undefined }
 
 export default Plugin.define({
   id: "local.quote",
@@ -237,36 +247,58 @@ export default Plugin.define({
     const Chip = (props: { sessionID: string }) => {
       onMount(() => refresh(props.sessionID))
       const list = () => quotes()[props.sessionID]
+      // The composer can be any width, so the box measures itself; a burst of resizes is one update.
+      const [width, setWidth] = createSignal(DEFAULT_WIDTH)
+      const tracker = createWidthTracker({ initial: DEFAULT_WIDTH, onChange: setWidth })
+      let box: Measured | undefined
+      onCleanup(() => {
+        tracker.dispose()
+        if (box) box.onSizeChange = undefined
+      })
+      const inner = () => Math.max(1, width() - BOX_CHROME)
       return (
         <Show when={list()}>
           {(items) => (
-            <box flexDirection="column" border={true} borderColor={theme.text.faint} paddingLeft={1} paddingRight={1}>
-              <box flexDirection="row">
-                <text fg={primary}>{items().length === 1 ? "Citazione" : "Citazioni"}</text>
-                <Show when={items().length > 1}>
-                  <text fg={theme.text.faint}>{`  ${items().length} di ${MAX_QUOTES}`}</text>
+            <box
+              flexDirection="column"
+              border={true}
+              borderColor={theme.text.faint}
+              paddingLeft={1}
+              paddingRight={1}
+              width="100%"
+              ref={(el: Measured) => {
+                box = el
+                el.onSizeChange = () => tracker.report(el.width)
+                queueMicrotask(() => tracker.report(el.width))
+              }}
+            >
+              <box flexDirection="row" flexShrink={0}>
+                <text fg={primary} wrapMode="none">{titleLine(items().length, inner()).name}</text>
+                <Show when={titleLine(items().length, inner()).counter !== ""}>
+                  <text fg={theme.text.faint} wrapMode="none">{titleLine(items().length, inner()).counter}</text>
                 </Show>
               </box>
               <For each={items()}>
                 {(quote, index) => {
-                  const row = () => rowSummary(quote)
+                  const row = () => rowLayout(quote, inner())
                   return (
-                    <box flexDirection="row" onMouseDown={() => removeAt(props.sessionID, index(), quote)}>
-                      <text fg={theme.text.muted}>{`${index() + 1}  ${row().preview}`}</text>
+                    <box flexDirection="row" flexShrink={0} onMouseDown={() => removeAt(props.sessionID, index(), quote)}>
+                      <text fg={theme.text.muted} wrapMode="none">{`${index() + 1}  ${row().preview}`}</text>
                       <Show when={row().lineLabel !== ""}>
-                        <text fg={theme.text.faint}>{`  ${row().lineLabel}`}</text>
+                        <text fg={theme.text.faint} wrapMode="none">{`  ${row().lineLabel}`}</text>
                       </Show>
-                      <Show
-                        when={row().comment !== ""}
-                        fallback={<text fg={theme.text.faint}>{"  senza commento"}</text>}
-                      >
-                        <text fg={theme.text.base}>{`  ${row().comment}`}</text>
+                      <Show when={row().comment !== ""}>
+                        <text fg={row().placeholder ? theme.text.faint : theme.text.base} wrapMode="none">
+                          {`  ${row().comment}`}
+                        </text>
                       </Show>
                     </box>
                   )
                 }}
               </For>
-              <text fg={theme.text.faint}>{`clic su una riga per togliere, ${REMOVE_LABEL} toglie l'ultima, ${SEND_LABEL} invia solo le citazioni`}</text>
+              <Show when={hintLine(REMOVE_LABEL, SEND_LABEL, inner())}>
+                {(hint) => <text fg={theme.text.faint} wrapMode="none">{hint()}</text>}
+              </Show>
             </box>
           )}
         </Show>

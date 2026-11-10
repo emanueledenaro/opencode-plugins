@@ -5,8 +5,11 @@
 import { Plugin } from "@opencode/plugin/tui"
 import { ErrorBoundary, For, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import {
+  DEFAULT_WIDTH,
   buildView,
   createRunTracker,
+  createWidthTracker,
+  rowLayout,
   spinnerFrame,
   toolDetail,
   type ChildInput,
@@ -17,7 +20,9 @@ import {
 const CLOCK_MS = 5_000
 const SPIN_MS = 140
 const DIM = 2
-const DEFAULT_WIDTH = 34
+
+// The one thing read from the OpenTUI box: its own width, as OpenCode's own footer does.
+type Measured = { width: number; onSizeChange?: (() => void) | undefined }
 
 export default Plugin.define({
   id: "local.agents-panel",
@@ -161,16 +166,20 @@ export default Plugin.define({
     }
 
     const Panel = (props: { sessionID: string }) => {
+      // The sidebar can be any width, so the panel measures itself; a burst of resizes is one update.
       const [width, setWidth] = createSignal(DEFAULT_WIDTH)
+      const tracker = createWidthTracker({ initial: DEFAULT_WIDTH, onChange: setWidth })
       const view = createMemo(() => buildView(childrenOf(props.sessionID), runs(), now(), width()))
+      const showModel = () => rowLayout(width()).showModel
       const spinning = createMemo(() => view().groups.some((g) => g.kind === "working"))
       createEffect(() => {
         if (!spinning()) return
         spinStart()
         onCleanup(spinStop)
       })
-      let box: { width: number; onSizeChange?: () => void } | undefined
+      let box: Measured | undefined
       onCleanup(() => {
+        tracker.dispose()
         if (box) box.onSizeChange = undefined
       })
       return (
@@ -178,18 +187,15 @@ export default Plugin.define({
           flexDirection="column"
           width="100%"
           gap={1}
-          ref={(el: { width: number; onSizeChange?: () => void }) => {
+          ref={(el: Measured) => {
             box = el
-            const measure = () => {
-              if (el.width > 0) setWidth(el.width)
-            }
-            el.onSizeChange = measure
-            queueMicrotask(measure)
+            el.onSizeChange = () => tracker.report(el.width)
+            queueMicrotask(() => tracker.report(el.width))
           }}
         >
           <Show
             when={!view().empty}
-            fallback={<text fg={theme.text.faint}>{view().emptyText}</text>}
+            fallback={<text fg={theme.text.faint} wrapMode="none">{view().emptyText}</text>}
           >
             <box flexDirection="row" justifyContent="space-between">
               <text fg={theme.text.muted} wrapMode="none">{view().header.title}</text>
@@ -219,17 +225,25 @@ export default Plugin.define({
                               {row.mark as string}
                             </text>
                           </Show>
+                          <Show when={row.lead !== ""}>
+                            <text
+                              fg={modelColour(row.modelKey)}
+                              attributes={group.kind === "done" ? DIM : 0}
+                              wrapMode="none"
+                            >
+                              {row.lead}
+                            </text>
+                          </Show>
                           <text
-                            fg={modelColour(row.modelKey)}
+                            fg={showModel() ? theme.text.base : modelColour(row.modelKey)}
                             attributes={group.kind === "done" ? DIM : 0}
                             wrapMode="none"
                           >
-                            {row.lead}
-                          </text>
-                          <text fg={theme.text.base} attributes={group.kind === "done" ? DIM : 0} wrapMode="none">
                             {row.name}
                           </text>
-                          <text fg={theme.text.faint} wrapMode="none">{row.time}</text>
+                          <Show when={row.time !== ""}>
+                            <text fg={theme.text.faint} wrapMode="none">{row.time}</text>
+                          </Show>
                         </box>
                         <Show when={row.detail}>
                           <text fg={theme.text.faint} wrapMode="none">{row.detail as string}</text>

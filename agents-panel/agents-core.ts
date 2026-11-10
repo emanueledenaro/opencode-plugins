@@ -5,11 +5,19 @@
 export const MAX_FINISHED = 3
 export const MAX_ROWS = 10
 export const TITLE_MAX = 60
-export const MIN_WIDTH = 24
 export const MAX_RUNS = 200
+export const RESIZE_COALESCE_MS = 50
+
+/** Width assumed before the panel has been measured, and for a width that is not a usable number. */
+export const DEFAULT_WIDTH = 34
+/** Below this the model column goes, so the name keeps its room. */
+export const MODEL_MIN_WIDTH = 24
+/** Below this the time goes too: only the name is left. */
+export const TIME_MIN_WIDTH = 14
 
 const MODEL_COLUMN = 9
 const DETAIL_INDENT = " ".repeat(11)
+const COMPACT_INDENT = "  "
 const NAME_GAP = 2
 
 export const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
@@ -202,22 +210,34 @@ export function createRunTracker() {
 
 type Entry = { child: ChildInput; run: Run | undefined }
 
+const usableWidth = (width: number): number => (Number.isFinite(width) && width >= 1 ? Math.floor(width) : DEFAULT_WIDTH)
+
+/** What a row shows at this width: the model column goes first, then the time. */
+export function rowLayout(width: number): { showModel: boolean; showTime: boolean } {
+  const w = usableWidth(width)
+  return { showModel: w >= MODEL_MIN_WIDTH, showTime: w >= TIME_MIN_WIDTH }
+}
+
 function makeRow(entry: Entry, kind: GroupKind, now: number, width: number): ViewRow {
   const { child, run } = entry
+  const { showModel, showTime } = rowLayout(width)
   const model = shortModel(run?.modelId ?? child.modelId)
   const finished = kind === "done"
   const failed = finished && run?.outcome === "error"
   const since = finished ? (run?.endedAt ?? child.updatedAt) : (run?.startedAt ?? child.createdAt)
-  const time = clockIt(now - since, finished)
+  const time = showTime ? clockIt(now - since, finished) : ""
   const mark = failed ? "✗ " : undefined
-  const lead = `${mark ? "" : "  "}${model.label.padEnd(MODEL_COLUMN)}`
-  const room = width - 2 - MODEL_COLUMN - time.length
-  const name = fit(displayTitle(child.title, TITLE_MAX), room - NAME_GAP).padEnd(room)
+  const lead = `${mark ? "" : "  "}${showModel ? model.label.padEnd(MODEL_COLUMN) : ""}`
+  const room = Math.max(1, width - 2 - (showModel ? MODEL_COLUMN : 0) - time.length)
+  const title = fit(displayTitle(child.title, TITLE_MAX), showTime ? Math.max(1, room - NAME_GAP) : room)
+  const name = showTime ? title.padEnd(room) : title
 
   let detailText: string | undefined
   if (kind === "waiting") detailText = child.permissionPending ? "chiede un permesso" : "ha una domanda"
   else if (kind === "working") detailText = run?.tool
-  const detail = detailText ? `${DETAIL_INDENT}└ ${fit(detailText, width - DETAIL_INDENT.length - 2)}` : undefined
+  const indent = showModel ? DETAIL_INDENT : COMPACT_INDENT
+  const detailRoom = width - indent.length - 2
+  const detail = detailText && detailRoom >= 1 ? `${indent}└ ${fit(detailText, detailRoom)}` : undefined
 
   return { id: child.id, mark, lead, name, time, detail, failed, modelKey: model.key }
 }
@@ -233,7 +253,7 @@ const GROUPS: { kind: GroupKind; icon: string; title: string }[] = [
  * (newest first). At most MAX_ROWS rows: active rows win, finished fill what is left.
  */
 export function buildView(children: ChildInput[], runs: Record<string, Run>, now: number, width: number): View {
-  const w = Math.max(width, MIN_WIDTH)
+  const w = usableWidth(width)
   const entries: Entry[] = children.map((child) => ({ child, run: runs[child.id] }))
   const startOf = (e: Entry) => e.run?.startedAt ?? e.child.createdAt
   const endOf = (e: Entry) => e.run?.endedAt ?? e.child.updatedAt
@@ -253,17 +273,73 @@ export function buildView(children: ChildInput[], runs: Record<string, Run>, now
   const byKind: Record<GroupKind, Entry[]> = { waiting: shownWaiting, working: shownWorking, done: shownDone }
   const groups: ViewGroup[] = GROUPS.filter((g) => byKind[g.kind].length > 0).map((g) => ({
     ...g,
+    title: fit(g.title, Math.max(1, w - 2)),
     rows: byKind[g.kind].map((e) => makeRow(e, g.kind, now, w)),
   }))
 
-  const title = "SUBAGENTI"
+  const full = "SUBAGENTI"
+  const title = fit(full, w)
+  const count = String(activeCount)
+  // The count sits on the right edge, with at least one blank before it, or is left out.
+  const showCount = activeCount > 0 && title === full && w - full.length >= count.length + 1
   const hidden = activeCount - shownActive
   return {
     empty: children.length === 0,
-    emptyText: "Nessun subagente",
-    header: { title, count: activeCount > 0 ? String(activeCount).padStart(w - title.length) : "" },
+    emptyText: fit("Nessun subagente", w),
+    header: { title, count: showCount ? count.padStart(w - title.length) : "" },
     groups,
     hidden,
-    hiddenText: `+${hidden} altri`,
+    hiddenText: fit(`+${hidden} altri`, w),
+  }
+}
+
+export type Scheduler = { set: (fn: () => void, ms: number) => unknown; clear: (handle: unknown) => void }
+
+/**
+ * Turns a stream of measured widths into few updates: the first real size is applied at once, later
+ * ones are coalesced to one update per `delayMs`, and a size that is already shown does nothing.
+ */
+export function createWidthTracker(options: {
+  initial: number
+  onChange: (width: number) => void
+  delayMs?: number
+  scheduler?: Scheduler
+}) {
+  const delay = options.delayMs ?? RESIZE_COALESCE_MS
+  const scheduler: Scheduler = options.scheduler ?? {
+    set: (fn, ms) => setTimeout(fn, ms),
+    clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+  }
+  let shown = options.initial
+  let latest = options.initial
+  let measured = false
+  let handle: unknown
+  let disposed = false
+  const flush = () => {
+    handle = undefined
+    if (latest !== shown) {
+      shown = latest
+      options.onChange(latest)
+    }
+  }
+  return {
+    report(raw: number) {
+      if (disposed || !Number.isFinite(raw) || raw <= 0) return
+      const next = Math.floor(raw)
+      if (measured && next === latest) return
+      latest = next
+      if (!measured) {
+        measured = true
+        if (handle !== undefined) scheduler.clear(handle)
+        flush()
+        return
+      }
+      if (handle === undefined) handle = scheduler.set(flush, delay)
+    },
+    dispose() {
+      disposed = true
+      if (handle !== undefined) scheduler.clear(handle)
+      handle = undefined
+    },
   }
 }

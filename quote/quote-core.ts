@@ -7,8 +7,9 @@ export const MAX_QUOTES = 5
 export const MAX_COMMENT_CHARS = 2000
 export const CHIP_PREVIEW_CHARS = 80
 // A row with a comment must also fit the comment, so its quote preview is shorter.
-export const CHIP_PREVIEW_WITH_COMMENT_CHARS = 40
-export const COMMENT_PREVIEW_CHARS = 30
+export const COMMENT_MAX_CHARS = 80 // ceiling only; the box gives a comment what the width allows
+export const RESIZE_COALESCE_MS = 50
+export const NO_COMMENT = "senza commento"
 export const QUOTE_NAME = "Citazione"
 export const QUOTE_DESCRIPTION = "Testo citato dall'utente nella conversazione"
 export const QUOTE_COMMENT_DESCRIPTION = "Testo citato dall'utente e il suo commento su questo pezzo"
@@ -121,20 +122,127 @@ export const chipSummary = (
   return { preview: `«${preview}${cut ? "…" : ""}»`, lines, lineLabel: lines > 1 ? `${lines} righe` : "" }
 }
 
-/** The comment shortened for the box: one line, at most COMMENT_PREVIEW_CHARS, with an ellipsis when cut. */
-export const commentPreview = (comment: string): string => {
-  const flat = comment.replace(/\s+/g, " ").trim()
-  if (flat.length <= COMMENT_PREVIEW_CHARS) return flat
-  let end = COMMENT_PREVIEW_CHARS
-  if (isHighSurrogate(flat.charCodeAt(end - 1))) end += 1
-  return `${flat.slice(0, end)}…`
+const chars = (text: string): string[] => [...text]
+const oneLine = (text: string): string => text.replace(/\s+/g, " ").trim()
+/** `text` cut to `width` characters (not UTF-16 units), ending with an ellipsis when it was longer. */
+const cutText = (text: string, width: number): string => {
+  if (width <= 0) return ""
+  const all = chars(text)
+  return all.length <= width ? text : `${all.slice(0, width - 1).join("")}…`
+}
+/** At most `max` characters; longer text keeps `max` and ends with an ellipsis. */
+const ceiling = (text: string, max: number): string => {
+  const all = chars(text)
+  return all.length <= max ? text : `${all.slice(0, max).join("")}…`
 }
 
-/** What one row of the box shows: the quote preview (shorter when there is a comment), line label, comment. */
-export const rowSummary = (quote: PendingQuote): { preview: string; lineLabel: string; comment: string } => {
-  const max = quote.comment === "" ? CHIP_PREVIEW_CHARS : CHIP_PREVIEW_WITH_COMMENT_CHARS
-  const summary = chipSummary(quote.text, max)
-  return { preview: summary.preview, lineLabel: summary.lineLabel, comment: commentPreview(quote.comment) }
+const ROW_PREFIX = 3 // "1  "
+const ROW_GAP = 2
+const MIN_PREVIEW = 8
+const MIN_COMMENT = 10
+const COMMENT_SHARE = 0.4
+
+export type RowLayout = { preview: string; lineLabel: string; comment: string; placeholder: boolean }
+
+/**
+ * What one row of the box shows in `inner` columns (the row starts with a 3 column number). It gives up,
+ * in order: the line label, then room of the comment and the preview (each cut with an ellipsis), then
+ * the comment altogether. Never wider than `inner` (for 6 columns or more).
+ */
+export const rowLayout = (quote: PendingQuote, inner: number): RowLayout => {
+  const room = Number.isNaN(inner) ? Infinity : Math.max(1, Math.floor(inner) - ROW_PREFIX)
+  const flat = ceiling(oneLine(quote.text), CHIP_PREVIEW_CHARS)
+  const preview = `«${flat}»`
+  const lineLabel = chipSummary(quote.text).lineLabel
+  const placeholder = quote.comment.trim() === ""
+  const comment = placeholder ? NO_COMMENT : ceiling(oneLine(quote.comment), COMMENT_MAX_CHARS)
+  const P = chars(preview).length
+  const C = chars(comment).length
+  const L = lineLabel === "" ? 0 : ROW_GAP + chars(lineLabel).length
+  const fitPreview = (width: number): string =>
+    P <= width ? preview : width - 2 < 1 ? cutText(preview, width) : `«${cutText(flat, width - 2)}»`
+
+  if (P + L + ROW_GAP + C <= room) return { preview, lineLabel, comment, placeholder }
+
+  let commentBudget = Math.min(C, Math.max(MIN_COMMENT, Math.floor(COMMENT_SHARE * (room - ROW_GAP))))
+  const previewBudget = Math.min(P, room - ROW_GAP - commentBudget)
+  if (previewBudget >= Math.min(P, MIN_PREVIEW)) {
+    commentBudget = Math.min(C, commentBudget + (room - ROW_GAP - previewBudget - commentBudget))
+    return { preview: fitPreview(previewBudget), lineLabel: "", comment: cutText(comment, commentBudget), placeholder }
+  }
+  return { preview: fitPreview(room), lineLabel: "", comment: "", placeholder: false }
+}
+
+/** The key hints under the rows: the longest wording that fits `width`, or null when none does. */
+export const hintLine = (removeKey: string, sendKey: string, width: number): string | null => {
+  const room = Number.isNaN(width) ? Infinity : width
+  const wordings = [
+    `clic su una riga per togliere, ${removeKey} toglie l'ultima, ${sendKey} invia solo le citazioni`,
+    `clic toglie, ${removeKey} toglie l'ultima, ${sendKey} invia`,
+    `${removeKey} toglie l'ultima, ${sendKey} invia`,
+    `${sendKey} invia`,
+  ]
+  return wordings.find((text) => text.length <= room) ?? null
+}
+
+/** The title of the box: the counter ("3 di 5") only when it fits next to the name; the name is cut last. */
+export const titleLine = (count: number, inner: number): { name: string; counter: string } => {
+  const name = count === 1 ? "Citazione" : "Citazioni"
+  const counter = count > 1 ? `  ${count} di ${MAX_QUOTES}` : ""
+  const room = Number.isNaN(inner) ? Infinity : inner
+  if (name.length + counter.length <= room) return { name, counter }
+  return { name: cutText(name, room), counter: "" }
+}
+
+export type Scheduler = { set: (fn: () => void, ms: number) => unknown; clear: (handle: unknown) => void }
+
+/**
+ * Turns a stream of measured widths into few updates: the first real size is applied at once, later
+ * ones are coalesced to one update per `delayMs`, and a size that is already shown does nothing.
+ */
+export function createWidthTracker(options: {
+  initial: number
+  onChange: (width: number) => void
+  delayMs?: number
+  scheduler?: Scheduler
+}) {
+  const delay = options.delayMs ?? RESIZE_COALESCE_MS
+  const scheduler: Scheduler = options.scheduler ?? {
+    set: (fn, ms) => setTimeout(fn, ms),
+    clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+  }
+  let shown = options.initial
+  let latest = options.initial
+  let measured = false
+  let handle: unknown
+  let disposed = false
+  const flush = () => {
+    handle = undefined
+    if (latest !== shown) {
+      shown = latest
+      options.onChange(latest)
+    }
+  }
+  return {
+    report(raw: number) {
+      if (disposed || !Number.isFinite(raw) || raw <= 0) return
+      const next = Math.floor(raw)
+      if (measured && next === latest) return
+      latest = next
+      if (!measured) {
+        measured = true
+        if (handle !== undefined) scheduler.clear(handle)
+        flush()
+        return
+      }
+      if (handle === undefined) handle = scheduler.set(flush, delay)
+    },
+    dispose() {
+      disposed = true
+      if (handle !== undefined) scheduler.clear(handle)
+      handle = undefined
+    },
+  }
 }
 
 /** The line shown in the comment dialog: the quote preview, with the line count in brackets if several. */

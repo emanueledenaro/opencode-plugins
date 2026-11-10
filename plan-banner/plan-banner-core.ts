@@ -48,3 +48,68 @@ export function keyLabel(shortcuts: unknown): string {
 export function bannerText(key: string): string {
   return `La mia ultima risposta era in Plan: per farmi lavorare premi ${key} e scrivimi.`
 }
+
+export const RESIZE_COALESCE_MS = 50
+
+// The banner for `width` columns: the longest wording that fits, or null when even "Plan" does not.
+// A width that is not a number counts as no limit.
+export function bannerLine(key: string, width: number): string | null {
+  const room = Number.isNaN(width) ? Infinity : width
+  const wordings = [
+    bannerText(key),
+    `Ultima risposta in Plan: premi ${key} per farmi lavorare.`,
+    `Ultima risposta in Plan: premi ${key}.`,
+    `Plan: premi ${key}`,
+    "Plan",
+  ]
+  return wordings.find((text) => text.length <= room) ?? null
+}
+
+export type Scheduler = { set: (fn: () => void, ms: number) => unknown; clear: (handle: unknown) => void }
+
+// Turns a stream of measured widths into few updates: the first real size is applied at once, later ones
+// are coalesced to one update per `delayMs`, and a size that is already shown does nothing.
+export function createWidthTracker(options: {
+  initial: number
+  onChange: (width: number) => void
+  delayMs?: number
+  scheduler?: Scheduler
+}) {
+  const delay = options.delayMs ?? RESIZE_COALESCE_MS
+  const scheduler: Scheduler = options.scheduler ?? {
+    set: (fn, ms) => setTimeout(fn, ms),
+    clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+  }
+  let shown = options.initial
+  let latest = options.initial
+  let measured = false
+  let handle: unknown
+  let disposed = false
+  const flush = () => {
+    handle = undefined
+    if (latest !== shown) {
+      shown = latest
+      options.onChange(latest)
+    }
+  }
+  return {
+    report(raw: number) {
+      if (disposed || !Number.isFinite(raw) || raw <= 0) return
+      const next = Math.floor(raw)
+      if (measured && next === latest) return
+      latest = next
+      if (!measured) {
+        measured = true
+        if (handle !== undefined) scheduler.clear(handle)
+        flush()
+        return
+      }
+      if (handle === undefined) handle = scheduler.set(flush, delay)
+    },
+    dispose() {
+      disposed = true
+      if (handle !== undefined) scheduler.clear(handle)
+      handle = undefined
+    },
+  }
+}

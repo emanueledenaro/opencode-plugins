@@ -10,7 +10,7 @@ Plugin per OpenCode 2: selezioni del testo nel TUI, premi un tasto, scrivi un co
    - Invio salva la citazione col commento.
    - Invio con la riga vuota salva la citazione senza commento.
    - Esc annulla e non salva niente.
-4. Sopra il campo di scrittura vedi una scatola con una riga per citazione, numerata: `1  «anteprima…»  commento`. Il commento è accorciato per stare nella riga. Senza commento la riga dice `senza commento`, in colore tenue. Se la citazione ha più righe compare anche il loro numero.
+4. Sopra il campo di scrittura vedi una scatola con una riga per citazione, numerata: `1  «anteprima…»  commento`. La scatola segue la larghezza del campo di scrittura, anche quando la finestra cambia misura: se la riga non sta tutta, toglie prima il numero di righe, poi accorcia anteprima e commento (con `…`), e se resta poco posto tiene solo l'anteprima. Anche la riga dei tasti si accorcia, fino a lasciare solo il tasto per inviare. Senza commento la riga dice `senza commento`, in colore tenue. Se la citazione ha più righe compare anche il loro numero.
 5. Ripeti per altre citazioni. Alla sesta compare l'avviso "Massimo 5 citazioni".
 6. Scrivi il prompt e premi Invio. Il messaggio arriva con il tuo testo e gli allegati. Poi le citazioni spariscono.
 

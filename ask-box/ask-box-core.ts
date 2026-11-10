@@ -89,14 +89,78 @@ export function wrapLines(text: string, width: number): string[] {
   return out
 }
 
-// At most MAX_ASK_LINES lines once wrapped at `width`; a cut ends with an ellipsis that still fits.
-export function capAsk(text: string, width: number): string {
+// At most `maxLines` lines once wrapped at `width`; a cut ends with an ellipsis that still fits.
+export function capAsk(text: string, width: number, maxLines: number = MAX_ASK_LINES): string {
   const lines = wrapLines(text, width)
-  if (lines.length <= MAX_ASK_LINES) return lines.join("\n")
-  const kept = lines.slice(0, MAX_ASK_LINES)
-  const last = kept[MAX_ASK_LINES - 1]!
-  kept[MAX_ASK_LINES - 1] = `${last.slice(0, Math.max(0, width - 1)).trimEnd()}…`
+  if (lines.length <= maxLines) return lines.join("\n")
+  const kept = lines.slice(0, maxLines)
+  const last = kept[maxLines - 1]!
+  kept[maxLines - 1] = `${last.slice(0, Math.max(0, width - 1)).trimEnd()}…`
   return kept.join("\n")
+}
+
+// About this many characters are shown whatever the sidebar width, so a narrow sidebar gets more lines.
+const ASK_CHARS = 288
+export const MAX_ASK_LINES_NARROW = 12
+export const RESIZE_COALESCE_MS = 50
+
+export function askLineCap(width: number): number {
+  if (!Number.isFinite(width) || width <= 0) return MAX_ASK_LINES
+  return Math.min(MAX_ASK_LINES_NARROW, Math.max(MAX_ASK_LINES, Math.ceil(ASK_CHARS / width)))
+}
+
+// The ask as the box shows it: wrapped at the measured width, capped at the cap for that width.
+export function askText(text: string, width: number): string {
+  return capAsk(text, width, askLineCap(width))
+}
+
+export type Scheduler = { set: (fn: () => void, ms: number) => unknown; clear: (handle: unknown) => void }
+
+// Turns a stream of measured widths into few updates: the first real size is applied at once, later ones
+// are coalesced to one update per `delayMs`, and a size that is already shown does nothing.
+export function createWidthTracker(options: {
+  initial: number
+  onChange: (width: number) => void
+  delayMs?: number
+  scheduler?: Scheduler
+}) {
+  const delay = options.delayMs ?? RESIZE_COALESCE_MS
+  const scheduler: Scheduler = options.scheduler ?? {
+    set: (fn, ms) => setTimeout(fn, ms),
+    clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+  }
+  let shown = options.initial
+  let latest = options.initial
+  let measured = false
+  let handle: unknown
+  let disposed = false
+  const flush = () => {
+    handle = undefined
+    if (latest !== shown) {
+      shown = latest
+      options.onChange(latest)
+    }
+  }
+  return {
+    report(raw: number) {
+      if (disposed || !Number.isFinite(raw) || raw <= 0) return
+      const next = Math.floor(raw)
+      if (measured && next === latest) return
+      latest = next
+      if (!measured) {
+        measured = true
+        if (handle !== undefined) scheduler.clear(handle)
+        flush()
+        return
+      }
+      if (handle === undefined) handle = scheduler.set(flush, delay)
+    },
+    dispose() {
+      disposed = true
+      if (handle !== undefined) scheduler.clear(handle)
+      handle = undefined
+    },
+  }
 }
 
 export function toTurns(messages: unknown): Turn[] {

@@ -4,7 +4,7 @@ A read-only OpenCode 2 plugin that shows how much of your Claude subscription yo
 
 ## What you see
 
-- Under the prompt, always: two small coloured meters, `5h ▰▰▱▱▱▱ 23%   sett ▰▰▰▰▰▰ 96%`. Green under 70%, yellow from 70%, red above 90%. `libero` means no 5-hour window is open.
+- Under the prompt, always: two small coloured meters, `5h ▰▰▱▱▱▱ 23%   sett ▰▰▰▰▰▰ 96%`. Green under 70%, yellow from 70%, red above 90%. `libero` means no 5-hour window is open. The item measures the room it has in the footer row (not the terminal width) and re-measures when the window or the sidebar changes. When the room shrinks it shortens the bars, then shows only text (`5h 23% sett 96%`), then only the window that matters most, then nothing. It never wraps onto a second line.
 - Above 90% weekly, one warning toast the first time it crosses.
 - `/claude-usage` (alias `/usage`, also in the Ctrl+P palette) refreshes and opens a dialog with both windows, when each one resets, and the last error if there was one.
 - `(vecchio)` after the meters means the last refresh failed and the numbers are old. `accesso scaduto, apri claude` means the Claude Code login has expired.

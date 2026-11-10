@@ -8,7 +8,7 @@ A read-only OpenCode 2 plugin that shows a one-line warning above the prompt whi
 La mia ultima risposta era in Plan: per farmi lavorare premi Shift+Tab e scrivimi.
 ```
 
-The key comes from the binding of the `agent.cycle` command (`context.keymap.shortcuts("agent.cycle")`), so it follows your keymap. If it cannot be read, it says `Shift+Tab`. The line disappears once a reply arrives under another agent. Nothing is shown when the last reply came from any agent other than `plan`.
+The sentence follows the width of the prompt: the full text, then shorter wordings (`Plan: premi Shift+Tab`), then just `Plan`, and nothing when even that does not fit. The key comes from the binding of the `agent.cycle` command (`context.keymap.shortcuts("agent.cycle")`), so it follows your keymap. If it cannot be read, it says `Shift+Tab`. The line disappears once a reply arrives under another agent. Nothing is shown when the last reply came from any agent other than `plan`.
 
 ## Why it says "last reply"
 

@@ -29,7 +29,7 @@ SUBAGENTI                           3
 - The line under a row: `chiede un permesso` or `ha una domanda` for a waiting agent, the latest tool call for a running one: the agent's short description of a shell call, or only the program name (`make`, `bun`), never the command line, which can hold a token; file tools show the file name; search tools show only their name.
 - At most 10 rows. Waiting and running agents come first and are never hidden by finished ones; if they alone are more than 10, a line `+N altri` counts the rest.
 - Click a row to open that child session. With no children the block shows `Nessun subagente`.
-- The text adapts to the sidebar width. Colours come from the active theme.
+- The text adapts to the measured sidebar width, also after a resize: below 24 columns the model column goes (the name takes the model colour), below 14 the time goes too. Lines are always cut with `…`, never wrapped. Colours come from the active theme.
 
 ## Install
 

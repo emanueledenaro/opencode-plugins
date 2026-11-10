@@ -1,8 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import {
   CHIP_PREVIEW_CHARS,
-  CHIP_PREVIEW_WITH_COMMENT_CHARS,
-  COMMENT_PREVIEW_CHARS,
   MAX_COMMENT_CHARS,
   MAX_QUOTES,
   MAX_QUOTE_CHARS,
@@ -20,7 +18,11 @@ import {
   capQuotes,
   chipSummary,
   clearPending,
-  commentPreview,
+  rowLayout,
+  hintLine,
+  titleLine,
+  createWidthTracker,
+  NO_COMMENT,
   dialogPreview,
   formatAttachment,
   loadPending,
@@ -30,7 +32,6 @@ import {
   pendingFileName,
   pendingRoom,
   removePending,
-  rowSummary,
   sameList,
   selectionFresh,
   serializePending,
@@ -278,42 +279,6 @@ describe("chipSummary", () => {
   test("takes a custom preview length", () => {
     expect(chipSummary("abcdefghij", 4).preview).toBe("«abcd…»")
     expect(chipSummary("abcd", 4).preview).toBe("«abcd»")
-  })
-})
-
-describe("commentPreview", () => {
-  test("is empty without a comment", () => {
-    expect(commentPreview("")).toBe("")
-  })
-  test("shows a short comment as it is", () => {
-    expect(commentPreview("bel punto")).toBe("bel punto")
-  })
-  test("shortens at the limit with an ellipsis, not before", () => {
-    expect(COMMENT_PREVIEW_CHARS).toBe(30)
-    expect(commentPreview("c".repeat(COMMENT_PREVIEW_CHARS))).toBe("c".repeat(COMMENT_PREVIEW_CHARS))
-    expect(commentPreview("c".repeat(COMMENT_PREVIEW_CHARS + 1))).toBe(`${"c".repeat(COMMENT_PREVIEW_CHARS)}…`)
-  })
-  test("collapses whitespace and does not cut a surrogate pair", () => {
-    expect(commentPreview("uno\n  due")).toBe("uno due")
-    expect(commentPreview("c".repeat(COMMENT_PREVIEW_CHARS - 1) + "😀😀")).toBe(`${"c".repeat(COMMENT_PREVIEW_CHARS - 1)}😀…`)
-  })
-})
-
-describe("rowSummary", () => {
-  test("a quote without comment uses the long preview and has no comment text", () => {
-    const row = rowSummary(Q("a".repeat(CHIP_PREVIEW_CHARS + 5)))
-    expect(row.preview).toBe(`«${"a".repeat(CHIP_PREVIEW_CHARS)}…»`)
-    expect(row.comment).toBe("")
-  })
-  test("a quote with a comment uses the shorter preview and the shortened comment", () => {
-    expect(CHIP_PREVIEW_WITH_COMMENT_CHARS).toBeLessThan(CHIP_PREVIEW_CHARS)
-    const row = rowSummary(Q("a".repeat(CHIP_PREVIEW_CHARS), "c".repeat(100)))
-    expect(row.preview).toBe(`«${"a".repeat(CHIP_PREVIEW_WITH_COMMENT_CHARS)}…»`)
-    expect(row.comment).toBe(`${"c".repeat(COMMENT_PREVIEW_CHARS)}…`)
-  })
-  test("carries the line label", () => {
-    expect(rowSummary(Q("a\nb")).lineLabel).toBe("2 righe")
-    expect(rowSummary(Q("a")).lineLabel).toBe("")
   })
 })
 
@@ -954,3 +919,197 @@ describe("strict comment on read", () => {
   })
 })
 
+
+describe("rowLayout", () => {
+  const total = (inner: number, quote: PendingQuote) => {
+    const row = rowLayout(quote, inner)
+    const label = row.lineLabel === "" ? 0 : 2 + [...row.lineLabel].length
+    const comment = row.comment === "" ? 0 : 2 + [...row.comment].length
+    return 3 + [...row.preview].length + label + comment
+  }
+
+  test("everything while there is room", () => {
+    expect(rowLayout(Q("uno due tre", "bel punto"), 60)).toEqual({
+      preview: "«uno due tre»",
+      lineLabel: "",
+      comment: "bel punto",
+      placeholder: false,
+    })
+  })
+
+  test("a quote without comment shows the placeholder", () => {
+    const row = rowLayout(Q("ciao"), 60)
+    expect(row.comment).toBe(NO_COMMENT)
+    expect(row.placeholder).toBe(true)
+    expect(NO_COMMENT).toBe("senza commento")
+  })
+
+  test("the preview never goes past the ceiling, however wide the box", () => {
+    expect(rowLayout(Q("a".repeat(200)), 400).preview).toBe(`«${"a".repeat(CHIP_PREVIEW_CHARS)}…»`)
+  })
+
+  test("the line label goes first when the row is too wide", () => {
+    const quote = Q("a\nb", "x")
+    expect(rowLayout(quote, 20).lineLabel).toBe("2 righe")
+    expect(rowLayout(quote, 19)).toEqual({ preview: "«a b»", lineLabel: "", comment: "x", placeholder: false })
+  })
+
+  test("then preview and comment share the room, each cut with an ellipsis", () => {
+    const row = rowLayout(Q("p".repeat(50), "c".repeat(50)), 40)
+    expect(row.preview).toBe(`«${"p".repeat(18)}…»`)
+    expect(row.comment).toBe(`${"c".repeat(13)}…`)
+    expect(row.lineLabel).toBe("")
+  })
+
+  test("a short preview leaves its extra room to the comment", () => {
+    const row = rowLayout(Q("breve", "c".repeat(50)), 40)
+    expect(row.preview).toBe("«breve»")
+    expect(row.comment).toBe(`${"c".repeat(27)}…`)
+  })
+
+  test("when the preview would get under 8 columns the comment is dropped", () => {
+    const row = rowLayout(Q("p".repeat(50), "c".repeat(50)), 20)
+    expect(row.preview).toBe(`«${"p".repeat(14)}…»`)
+    expect(row.comment).toBe("")
+    expect(row.placeholder).toBe(false)
+  })
+
+  test("a row is never wider than the box, at any width from 6 to 120", () => {
+    const quotes = [
+      Q("p".repeat(300), "c".repeat(300)),
+      Q("uno\ndue\ntre", "bel punto"),
+      Q("ciao"),
+      Q("😀".repeat(100), "😀".repeat(100)),
+    ]
+    for (const quote of quotes) for (let inner = 6; inner <= 120; inner++) expect(total(inner, quote)).toBeLessThanOrEqual(inner)
+  })
+
+  test("a width that is not a number counts as no limit", () => {
+    expect(rowLayout(Q("ciao", "bene"), Number.NaN).comment).toBe("bene")
+  })
+})
+
+describe("hintLine", () => {
+  const L1 = "clic su una riga per togliere, alt+y toglie l'ultima, alt+s invia solo le citazioni"
+  const L2 = "clic toglie, alt+y toglie l'ultima, alt+s invia"
+  const L3 = "alt+y toglie l'ultima, alt+s invia"
+  const L4 = "alt+s invia"
+  test("the longest wording that fits", () => {
+    expect(hintLine("alt+y", "alt+s", L1.length)).toBe(L1)
+    expect(hintLine("alt+y", "alt+s", L1.length - 1)).toBe(L2)
+    expect(hintLine("alt+y", "alt+s", L2.length - 1)).toBe(L3)
+    expect(hintLine("alt+y", "alt+s", L3.length - 1)).toBe(L4)
+  })
+  test("nothing when even the last wording does not fit", () => {
+    expect(hintLine("alt+y", "alt+s", L4.length - 1)).toBeNull()
+    expect(hintLine("alt+y", "alt+s", 0)).toBeNull()
+  })
+  test("never wider than the width", () => {
+    for (let width = 0; width < 120; width++) {
+      const line = hintLine("Cmd+Shift+Y", "Cmd+Shift+S", width)
+      if (line !== null) expect(line.length).toBeLessThanOrEqual(width)
+    }
+  })
+  test("a width that is not a number counts as no limit", () => {
+    expect(hintLine("alt+y", "alt+s", Number.NaN)).toBe(L1)
+  })
+})
+
+describe("titleLine", () => {
+  test("name and counter while there is room", () => {
+    expect(titleLine(3, 40)).toEqual({ name: "Citazioni", counter: "  3 di 5" })
+  })
+  test("a single quote has no counter", () => {
+    expect(titleLine(1, 40)).toEqual({ name: "Citazione", counter: "" })
+  })
+  test("the counter goes first, then the name is cut", () => {
+    expect(titleLine(3, 16)).toEqual({ name: "Citazioni", counter: "" })
+    expect(titleLine(3, 5)).toEqual({ name: "Cita…", counter: "" })
+  })
+})
+
+describe("createWidthTracker", () => {
+  const fake = () => {
+    const jobs: { fn: () => void; ms: number; id: number }[] = []
+    let id = 0
+    return {
+      jobs,
+      scheduler: {
+        set: (fn: () => void, ms: number) => {
+          jobs.push({ fn, ms, id: ++id })
+          return id
+        },
+        clear: (handle: unknown) => {
+          const at = jobs.findIndex((job) => job.id === handle)
+          if (at >= 0) jobs.splice(at, 1)
+        },
+      },
+    }
+  }
+  test("the first measurement is applied at once", () => {
+    const seen: number[] = []
+    const t = createWidthTracker({ initial: 80, onChange: (w) => seen.push(w), scheduler: fake().scheduler })
+    t.report(60)
+    expect(seen).toEqual([60])
+  })
+  test("a burst of sizes becomes one update with the last size, 50 ms later", () => {
+    const seen: number[] = []
+    const f = fake()
+    const t = createWidthTracker({ initial: 80, onChange: (w) => seen.push(w), scheduler: f.scheduler })
+    t.report(60)
+    for (const w of [59, 58, 57, 56]) t.report(w)
+    expect(seen).toEqual([60])
+    expect(f.jobs).toHaveLength(1)
+    expect(f.jobs[0]!.ms).toBe(50)
+    f.jobs[0]!.fn()
+    expect(seen).toEqual([60, 56])
+  })
+  test("the same size again does no work", () => {
+    const seen: number[] = []
+    const f = fake()
+    const t = createWidthTracker({ initial: 80, onChange: (w) => seen.push(w), scheduler: f.scheduler })
+    t.report(60)
+    t.report(60)
+    t.report(60.6)
+    expect(f.jobs).toHaveLength(0)
+    expect(seen).toEqual([60])
+  })
+  test("a burst that ends where it began changes nothing", () => {
+    const seen: number[] = []
+    const f = fake()
+    const t = createWidthTracker({ initial: 80, onChange: (w) => seen.push(w), scheduler: f.scheduler })
+    t.report(60)
+    t.report(20)
+    t.report(60)
+    f.jobs[0]?.fn()
+    expect(seen).toEqual([60])
+  })
+  test("zero, negative and NaN are ignored", () => {
+    const seen: number[] = []
+    const t = createWidthTracker({ initial: 80, onChange: (w) => seen.push(w), scheduler: fake().scheduler })
+    t.report(0)
+    t.report(-3)
+    t.report(Number.NaN)
+    expect(seen).toEqual([])
+  })
+  test("a report after dispose starts nothing", () => {
+    const seen: number[] = []
+    const f = fake()
+    const t = createWidthTracker({ initial: 80, onChange: (w) => seen.push(w), scheduler: f.scheduler })
+    t.report(60)
+    t.dispose()
+    t.report(30)
+    expect(f.jobs).toHaveLength(0)
+    expect(seen).toEqual([60])
+  })
+  test("dispose cancels the pending update", () => {
+    const seen: number[] = []
+    const f = fake()
+    const t = createWidthTracker({ initial: 80, onChange: (w) => seen.push(w), scheduler: f.scheduler })
+    t.report(60)
+    t.report(30)
+    t.dispose()
+    expect(f.jobs).toHaveLength(0)
+    expect(seen).toEqual([60])
+  })
+})

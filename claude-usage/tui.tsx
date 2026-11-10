@@ -2,17 +2,24 @@
 // Shows Claude subscription usage (5-hour and weekly window) in the prompt footer as two small
 // coloured meters, plus a /claude-usage dialog. Read only: see ./README.md and ./claude-usage.ts.
 import { Plugin } from "@opencode/plugin/tui"
-import { ErrorBoundary, Match, Show, Switch, createSignal } from "solid-js"
+import { ErrorBoundary, For, Match, Show, Switch, createMemo, createSignal, onCleanup } from "solid-js"
 import {
   POLL_INTERVAL_MS,
   WEEKLY_THRESHOLD_PERCENT,
+  createWidthTracker,
+  dialogLayout,
   failureIt,
+  fitText,
+  footerLayout,
+  footerMessage,
   formatPercent,
   meter,
-  resetIt,
+  resetFit,
+  rowBudget,
   updatedIt,
   usageLevel,
   weeklyOverThreshold,
+  type FooterPart,
   type Level,
   type MonitorState,
   type UsageWindow,
@@ -30,8 +37,22 @@ function reportRenderError(where: string, error: unknown) {
 }
 
 const TICK_MS = 30_000 // the monitor itself enforces the 5 minute interval and the back-off
-const FOOTER_CELLS = 6
-const DIALOG_CELLS = 20
+const LAYOUT_CHECK_MS = 1_000 // re-reads the row width, e.g. after the sidebar opens; no redraw unless it changed
+const LAYOUT_SETTLE_MS = 40 // after a resize event the layout is ready within a frame or two
+const PATH_RESERVE = 12 // columns OpenCode's own status box keeps when the footer item grows
+const FALLBACK_OTHERS = 45 // path and key hints, when the row cannot be measured
+const DIALOG_DEFAULT_WIDTH = 56
+const DIALOG_PADDING = 4
+
+// The few things read from OpenTUI renderables. Host renderables are not a public API, so every
+// access is optional and a failure only means the fallback width is used.
+type Node = {
+  width: number
+  parent?: Node | null
+  getChildren?: () => Node[]
+  getFlexGrow?: () => number
+  onSizeChange?: (() => void) | undefined
+}
 
 export default Plugin.define({
   id: "local.claude-usage",
@@ -41,10 +62,10 @@ export default Plugin.define({
     const theme = context.theme
     const colour = (level: Level) =>
       level === "high"
-        ? theme.text.feedback.error.base
+        ? (theme.text.feedback?.error?.base ?? theme.text.base)
         : level === "warn"
-          ? theme.text.feedback.warning.base
-          : theme.text.feedback.success.base
+          ? (theme.text.feedback?.warning?.base ?? theme.text.base)
+          : (theme.text.feedback?.success?.base ?? theme.text.base)
 
     const monitor = createLiveMonitor()
     const [state, setState] = createSignal<MonitorState>(monitor.state)
@@ -65,107 +86,224 @@ export default Plugin.define({
       warned = over
     })
 
-    // One small meter for the footer: "5h ▰▰▱▱▱▱ 23%".
-    const FooterMeter = (props: { label: string; window: UsageWindow | null }) => (
-      <box flexDirection="row">
-        <text fg={theme.text.muted}>{`${props.label} `}</text>
-        <Show when={props.window} fallback={<text fg={theme.text.faint}>libero</text>}>
-          {(window) => {
-            const bar = () => meter(window().percent, FOOTER_CELLS)
-            const fg = () => colour(usageLevel(window().percent))
-            return (
-              <box flexDirection="row">
-                <Show when={bar().filled.length > 0}>
-                  <text fg={fg()}>{bar().filled}</text>
-                </Show>
-                <Show when={bar().empty.length > 0}>
-                  <text fg={theme.text.faint}>{bar().empty}</text>
-                </Show>
-                <text fg={fg()}>{` ${formatPercent(window().percent)}`}</text>
-              </box>
-            )
-          }}
-        </Show>
-      </box>
-    )
-
     // Every read of state() sits inside JSX, so Solid re-renders when new numbers arrive.
     const loginFailure = () => {
       const kind = state().failure?.kind
       return kind === "login-expired" || kind === "no-login" ? state().failure : null
     }
-    const Footer = () => (
-      <Switch
-        fallback={
-          <box flexDirection="row">
-            <FooterMeter label="5h" window={state().snapshot?.fiveHour ?? null} />
-            <text>{"   "}</text>
-            <FooterMeter label="sett" window={state().snapshot?.sevenDay ?? null} />
-            <Show when={state().failure}>
-              <text fg={theme.text.faint}>{"  (vecchio)"}</text>
+
+    // One window of the footer: "5h ▰▱▱▱▱▱ 23%", or "5h 23%" when there is no room for the bar.
+    const FooterPiece = (props: { part: FooterPart }) => {
+      const percent = () => props.part.percent
+      const bar = () => {
+        const value = percent()
+        return value === null || props.part.cells === 0 ? undefined : meter(value, props.part.cells)
+      }
+      const fg = () => {
+        const value = percent()
+        return value === null ? theme.text.faint : colour(usageLevel(value))
+      }
+      return (
+        <box flexDirection="row" flexShrink={0}>
+          <text fg={theme.text.muted} wrapMode="none">{`${props.part.label} `}</text>
+          <Show when={percent() !== null} fallback={<text fg={theme.text.faint} wrapMode="none">libero</text>}>
+            <Show when={bar()}>
+              {(drawn) => (
+                <box flexDirection="row" flexShrink={0}>
+                  <Show when={drawn().filled.length > 0}>
+                    <text fg={fg()} wrapMode="none">{drawn().filled}</text>
+                  </Show>
+                  <Show when={drawn().empty.length > 0}>
+                    <text fg={theme.text.faint} wrapMode="none">{drawn().empty}</text>
+                  </Show>
+                </box>
+              )}
             </Show>
-          </box>
+            <text fg={fg()} wrapMode="none">{`${bar() ? " " : ""}${formatPercent(percent() ?? 0)}`}</text>
+          </Show>
+        </box>
+      )
+    }
+
+    const Footer = () => {
+      // Columns this item may use: measured from the row it sits in (never from the terminal width,
+      // because the footer is as wide as the prompt, not as the screen).
+      const fallback = () => Math.max(1, ((context.renderer as { width?: number }).width ?? 100) - FALLBACK_OTHERS)
+      const [budget, setBudget] = createSignal(fallback())
+      const tracker = createWidthTracker({ initial: budget(), onChange: setBudget })
+      let box: Node | undefined
+      const measure = () => {
+        try {
+          if (!box) return
+          const grower = box.parent?.getChildren?.().find((kid) => kid !== box && (kid.getFlexGrow?.() ?? 0) > 0)
+          tracker.report(rowBudget(box.width, grower?.width, PATH_RESERVE) ?? fallback())
+        } catch {
+          tracker.report(fallback())
         }
-      >
-        <Match when={loginFailure()}>
-          {(failure) => <text fg={theme.text.feedback.warning.base}>{`Claude: ${failureIt(failure())}`}</text>}
-        </Match>
-        <Match when={!state().snapshot}>
-          <text fg={theme.text.faint}>Claude: in attesa dei dati</text>
-        </Match>
-      </Switch>
-    )
+      }
+      const renderer = context.renderer as unknown as {
+        on?: (event: string, listener: () => void) => unknown
+        off?: (event: string, listener: () => void) => unknown
+      }
+      // The resize event comes before the new layout is computed, so the row is read one short step later.
+      let afterResize: ReturnType<typeof setTimeout> | undefined
+      const onResize = () => {
+        if (afterResize === undefined) {
+          afterResize = setTimeout(() => {
+            afterResize = undefined
+            measure()
+          }, LAYOUT_SETTLE_MS)
+        }
+      }
+      renderer.on?.("resize", onResize)
+      const check = setInterval(measure, LAYOUT_CHECK_MS)
+      onCleanup(() => {
+        renderer.off?.("resize", onResize)
+        if (afterResize !== undefined) clearTimeout(afterResize)
+        clearInterval(check)
+        tracker.dispose()
+        if (box) box.onSizeChange = undefined
+      })
+
+      const layout = createMemo(() =>
+        footerLayout(
+          {
+            five: state().snapshot?.fiveHour?.percent ?? null,
+            week: state().snapshot?.sevenDay?.percent ?? null,
+            stale: state().failure !== null,
+          },
+          budget(),
+        ),
+      )
+      const message = (kind: "login" | "waiting") => footerMessage(kind, budget())
+
+      return (
+        <box
+          flexDirection="row"
+          flexShrink={0}
+          ref={(el: Node) => {
+            box = el
+            el.onSizeChange = () => queueMicrotask(measure)
+            queueMicrotask(measure)
+          }}
+        >
+          <Switch
+            fallback={
+              <Show when={layout()}>
+                {(drawn) => (
+                  <box flexDirection="row" flexShrink={0}>
+                    <For each={drawn().parts}>
+                      {(part, index) => (
+                        <>
+                          <Show when={index() > 0}>
+                            <text wrapMode="none">{" ".repeat(drawn().gap)}</text>
+                          </Show>
+                          <FooterPiece part={part} />
+                        </>
+                      )}
+                    </For>
+                    <Show when={drawn().marker}>
+                      <text fg={theme.text.faint} wrapMode="none">{"  (vecchio)"}</text>
+                    </Show>
+                  </box>
+                )}
+              </Show>
+            }
+          >
+            <Match when={loginFailure()}>
+              <Show when={message("login")}>
+                {(text) => <text fg={(theme.text.feedback?.warning?.base ?? theme.text.base)} wrapMode="none">{text()}</text>}
+              </Show>
+            </Match>
+            <Match when={!state().snapshot}>
+              <Show when={message("waiting")}>
+                {(text) => <text fg={theme.text.faint} wrapMode="none">{text()}</text>}
+              </Show>
+            </Match>
+          </Switch>
+        </box>
+      )
+    }
 
     const unregisterFooter = context.ui.slot({
       append: "prompt.footer.status",
       render: () => (
-        <ErrorBoundary fallback={(error) => { reportRenderError("footer", error); return <text fg={theme.text.faint}>{"Claude: uso non disponibile"}</text> }}>
+        <ErrorBoundary fallback={(error) => { reportRenderError("footer", error); return <text fg={theme.text.faint} wrapMode="none">{"Claude: uso non disponibile"}</text> }}>
           <Footer />
         </ErrorBoundary>
       ),
     })
 
-    // One row of the dialog: label, wide meter, percentage, then the reset line underneath.
-    const DialogRow = (props: { label: string; window: UsageWindow | null }) => (
-      <box flexDirection="column" paddingBottom={1}>
-        <box flexDirection="row">
-          <text fg={theme.text.base}>{props.label.padEnd(11)}</text>
-          <Show when={props.window} fallback={<text fg={theme.text.faint}>nessuna finestra attiva</text>}>
-            {(window) => {
-              const bar = () => meter(window().percent, DIALOG_CELLS)
-              const fg = () => colour(usageLevel(window().percent))
-              return (
-                <box flexDirection="row">
-                  <Show when={bar().filled.length > 0}>
-                    <text fg={fg()}>{bar().filled}</text>
-                  </Show>
-                  <Show when={bar().empty.length > 0}>
-                    <text fg={theme.text.faint}>{bar().empty}</text>
-                  </Show>
-                  <text fg={fg()}>{`  ${formatPercent(window().percent).padStart(4)}`}</text>
-                </box>
-              )
-            }}
+    // One row of the dialog: label, meter, percentage, then the reset line underneath. The meter and
+    // the reset line follow the width of the dialog.
+    const DialogRow = (props: { label: string; window: UsageWindow | null; cells: number; inner: number }) => {
+      const pad = () => dialogLayout(props.inner).labelWidth
+      return (
+        <box flexDirection="column" paddingBottom={1}>
+          <box flexDirection="row">
+            <text fg={theme.text.base} wrapMode="none">{props.label.padEnd(pad())}</text>
+            <Show when={props.window} fallback={<text fg={theme.text.faint} wrapMode="none">{fitText("nessuna finestra attiva", Math.max(1, props.inner - pad()))}</text>}>
+              {(window) => {
+                const bar = () => meter(window().percent, props.cells)
+                const fg = () => colour(usageLevel(window().percent))
+                return (
+                  <box flexDirection="row" flexShrink={0}>
+                    <Show when={bar().filled.length > 0}>
+                      <text fg={fg()} wrapMode="none">{bar().filled}</text>
+                    </Show>
+                    <Show when={bar().empty.length > 0}>
+                      <text fg={theme.text.faint} wrapMode="none">{bar().empty}</text>
+                    </Show>
+                    <text fg={fg()} wrapMode="none">{`  ${formatPercent(window().percent).padStart(4)}`}</text>
+                  </box>
+                )
+              }}
+            </Show>
+          </box>
+          <Show when={props.window}>
+            {(window) => (
+              <text fg={theme.text.muted} wrapMode="none">
+                {`${"".padEnd(pad())}${resetFit(window(), now(), Math.max(1, props.inner - pad()))}`}
+              </text>
+            )}
           </Show>
         </box>
-        <Show when={props.window}>
-          {(window) => <text fg={theme.text.muted}>{`${"".padEnd(11)}${resetIt(window(), now())}`}</text>}
-        </Show>
-      </box>
-    )
+      )
+    }
 
     const Dialog = () => {
+      const [width, setWidth] = createSignal(DIALOG_DEFAULT_WIDTH)
+      const tracker = createWidthTracker({ initial: DIALOG_DEFAULT_WIDTH, onChange: setWidth })
+      let box: Node | undefined
+      onCleanup(() => {
+        tracker.dispose()
+        if (box) box.onSizeChange = undefined
+      })
+      const inner = () => Math.max(1, width() - DIALOG_PADDING)
+      const cells = () => dialogLayout(inner()).cells
       return (
-        <box flexDirection="column" paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1}>
+        <box
+          flexDirection="column"
+          width="100%"
+          paddingLeft={2}
+          paddingRight={2}
+          paddingTop={1}
+          paddingBottom={1}
+          ref={(el: Node) => {
+            box = el
+            el.onSizeChange = () => queueMicrotask(() => tracker.report(el.width))
+            queueMicrotask(() => tracker.report(el.width))
+          }}
+        >
           <text fg={theme.text.base}>Abbonamento Claude</text>
           <text>{" "}</text>
           <Show when={state().snapshot} fallback={<text fg={theme.text.faint}>Dati non ancora disponibili.</text>}>
             {(snap) => (
               <box flexDirection="column">
-                <DialogRow label="5 ore" window={snap().fiveHour} />
-                <DialogRow label="Settimana" window={snap().sevenDay} />
+                <DialogRow label="5 ore" window={snap().fiveHour} cells={cells()} inner={inner()} />
+                <DialogRow label="Settimana" window={snap().sevenDay} cells={cells()} inner={inner()} />
                 <Show when={weeklyOverThreshold(snap())}>
-                  <text fg={theme.text.feedback.error.base}>
+                  <text fg={(theme.text.feedback?.error?.base ?? theme.text.base)}>
                     {`Sopra il ${WEEKLY_THRESHOLD_PERCENT}%: stai usando la riserva del ${100 - WEEKLY_THRESHOLD_PERCENT}%.`}
                   </text>
                   <text>{" "}</text>
@@ -175,7 +313,7 @@ export default Plugin.define({
             )}
           </Show>
           <Show when={state().failure}>
-            {(failure) => <text fg={theme.text.feedback.warning.base}>{`Ultimo aggiornamento non riuscito: ${failureIt(failure())}`}</text>}
+            {(failure) => <text fg={(theme.text.feedback?.warning?.base ?? theme.text.base)}>{`Ultimo aggiornamento non riuscito: ${failureIt(failure())}`}</text>}
           </Show>
           <text>{" "}</text>
           <text fg={theme.text.faint}>esc per chiudere</text>

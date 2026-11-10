@@ -2,6 +2,15 @@ import { describe, expect, test } from "bun:test"
 import {
   usageLevel,
   meter,
+  footerLayout,
+  footerText,
+  dialogLayout,
+  fitText,
+  createWidthTracker,
+  rowBudget,
+  footerMessage,
+  resetFit,
+  FOOTER_MAX_CELLS,
   resetIt,
   updatedIt,
   type MonitorDeps,
@@ -348,5 +357,251 @@ describe("look", () => {
     expect(resetIt({ percent: 1, resetsAt: null }, now)).toBe("azzeramento non indicato")
     expect(updatedIt(now - 30_000, now)).toBe("aggiornato adesso")
     expect(updatedIt(now - 180_000, now)).toBe("aggiornato 3 min fa")
+  })
+})
+
+const ROW = (layout: ReturnType<typeof footerLayout>) => (layout === null ? null : footerText(layout))
+
+describe("footerLayout", () => {
+  const both = { five: 23, week: 96, stale: false }
+
+  test("full meters when there is room", () => {
+    const layout = footerLayout(both, 60)!
+    expect(footerText(layout)).toBe("5h ▰▱▱▱▱▱ 23%   sett ▰▰▰▰▰▰ 96%")
+    expect(layout.width).toBe(31)
+    expect(FOOTER_MAX_CELLS).toBe(6)
+  })
+
+  test("the old marker is added only while there is room for it", () => {
+    const stale = { ...both, stale: true }
+    expect(ROW(footerLayout(stale, 60))).toBe("5h ▰▱▱▱▱▱ 23%   sett ▰▰▰▰▰▰ 96%  (vecchio)")
+    expect(ROW(footerLayout(stale, 41))).toBe("5h ▰▱▱▱▱▱ 23%   sett ▰▰▰▰▰▰ 96%")
+  })
+
+  test("shorter bars come before text only", () => {
+    expect(ROW(footerLayout(both, 30))).toBe("5h ▰▱▱▱▱ 23%  sett ▰▰▰▰▰ 96%")
+    expect(ROW(footerLayout(both, 26))).toBe("5h ▰▱▱▱ 23%  sett ▰▰▰▰ 96%")
+    expect(ROW(footerLayout(both, 24))).toBe("5h ▰▱▱ 23%  sett ▰▰▰ 96%")
+  })
+
+  test("text only, then one window, then nothing", () => {
+    expect(ROW(footerLayout(both, 21))).toBe("5h 23% sett 96%")
+    expect(ROW(footerLayout(both, 15))).toBe("5h 23% sett 96%")
+    expect(ROW(footerLayout(both, 14))).toBe("sett 96%")
+    expect(ROW(footerLayout({ five: 99, week: 40, stale: false }, 9))).toBe("5h 99%")
+    expect(footerLayout(both, 7)).toBeNull()
+    expect(footerLayout(both, 0)).toBeNull()
+  })
+
+  test("never wider than the budget, at every budget", () => {
+    for (const data of [both, { five: 100, week: 100, stale: true }, { five: 5, week: null, stale: false }]) {
+      for (let budget = 0; budget <= 60; budget++) {
+        const layout = footerLayout(data, budget)
+        if (layout) {
+          expect(layout.width).toBeLessThanOrEqual(budget)
+          expect(footerText(layout).length).toBe(layout.width)
+        }
+      }
+    }
+  })
+
+  test("the budget only ever removes things, never reorders them", () => {
+    let last = Infinity
+    for (let budget = 60; budget >= 0; budget--) {
+      const width = footerLayout({ five: 50, week: 50, stale: true }, budget)?.width ?? 0
+      expect(width).toBeLessThanOrEqual(last)
+      last = width
+    }
+  })
+
+  test("a missing window says libero and keeps the other meter", () => {
+    expect(ROW(footerLayout({ five: null, week: 96, stale: false }, 60))).toBe("5h libero   sett ▰▰▰▰▰▰ 96%")
+    expect(ROW(footerLayout({ five: 23, week: null, stale: false }, 14))).toBe("5h 23%")
+  })
+
+  test("both windows missing says libero twice, and nothing when that does not fit", () => {
+    expect(ROW(footerLayout({ five: null, week: null, stale: false }, 60))).toBe("5h libero   sett libero")
+    expect(footerLayout({ five: null, week: null, stale: false }, 10)).toBeNull()
+  })
+
+  test("a budget that is not a number counts as no limit", () => {
+    expect(ROW(footerLayout(both, Number.NaN))).toBe("5h ▰▱▱▱▱▱ 23%   sett ▰▰▰▰▰▰ 96%")
+  })
+})
+
+describe("dialogLayout", () => {
+  test("bar of 20 cells when the dialog is wide", () => {
+    expect(dialogLayout(80).cells).toBe(20)
+    expect(dialogLayout(80).labelWidth).toBe(11)
+  })
+  test("the bar shrinks with the dialog and stops at 5", () => {
+    expect(dialogLayout(30).cells).toBe(13)
+    expect(dialogLayout(12).cells).toBe(5)
+  })
+  test("row width never passes the dialog width when it can help it", () => {
+    for (let width = 24; width <= 90; width++) {
+      const layout = dialogLayout(width)
+      expect(layout.labelWidth + layout.cells + 6).toBeLessThanOrEqual(Math.max(width, 22))
+    }
+  })
+})
+
+describe("fitText", () => {
+  test("keeps what fits, ends with an ellipsis otherwise", () => {
+    expect(fitText("si azzera tra 1 h", 40)).toBe("si azzera tra 1 h")
+    expect(fitText("si azzera tra 1 h 9 min", 10)).toBe("si azzera…")
+    expect(fitText("abc", 0)).toBe("")
+    expect(fitText("abc", 1)).toBe("…")
+  })
+  test("counts characters, not UTF-16 units", () => {
+    expect(fitText("😀😀😀😀", 3)).toBe("😀😀…")
+  })
+})
+
+describe("createWidthTracker", () => {
+  const fake = () => {
+    const jobs: { fn: () => void; ms: number; id: number }[] = []
+    let id = 0
+    return {
+      jobs,
+      scheduler: {
+        set: (fn: () => void, ms: number) => {
+          jobs.push({ fn, ms, id: ++id })
+          return id
+        },
+        clear: (handle: unknown) => {
+          const at = jobs.findIndex((job) => job.id === handle)
+          if (at >= 0) jobs.splice(at, 1)
+        },
+      },
+    }
+  }
+
+  test("the first measurement is applied at once", () => {
+    const seen: number[] = []
+    const t = createWidthTracker({ initial: 60, onChange: (w) => seen.push(w), scheduler: fake().scheduler })
+    t.report(75)
+    expect(seen).toEqual([75])
+  })
+
+  test("a burst of sizes becomes one update with the last size", () => {
+    const seen: number[] = []
+    const f = fake()
+    const t = createWidthTracker({ initial: 60, onChange: (w) => seen.push(w), scheduler: f.scheduler })
+    t.report(75)
+    for (const w of [74, 73, 72, 71, 70]) t.report(w)
+    expect(seen).toEqual([75])
+    expect(f.jobs.length).toBe(1)
+    expect(f.jobs[0]!.ms).toBe(50)
+    f.jobs[0]!.fn()
+    expect(seen).toEqual([75, 70])
+  })
+
+  test("the same size again does no work", () => {
+    const seen: number[] = []
+    const f = fake()
+    const t = createWidthTracker({ initial: 60, onChange: (w) => seen.push(w), scheduler: f.scheduler })
+    t.report(75)
+    t.report(75)
+    t.report(75.4)
+    expect(f.jobs.length).toBe(0)
+    expect(seen).toEqual([75])
+  })
+
+  test("a burst that ends where it began changes nothing", () => {
+    const seen: number[] = []
+    const f = fake()
+    const t = createWidthTracker({ initial: 60, onChange: (w) => seen.push(w), scheduler: f.scheduler })
+    t.report(75)
+    t.report(50)
+    t.report(75)
+    f.jobs[0]?.fn()
+    expect(seen).toEqual([75])
+  })
+
+  test("zero, negative and NaN are ignored", () => {
+    const seen: number[] = []
+    const t = createWidthTracker({ initial: 60, onChange: (w) => seen.push(w), scheduler: fake().scheduler })
+    t.report(0)
+    t.report(-3)
+    t.report(Number.NaN)
+    expect(seen).toEqual([])
+  })
+
+  test("a report after dispose starts nothing", () => {
+    const seen: number[] = []
+    const f = fake()
+    const t = createWidthTracker({ initial: 80, onChange: (w) => seen.push(w), scheduler: f.scheduler })
+    t.report(60)
+    t.dispose()
+    t.report(30)
+    expect(f.jobs).toHaveLength(0)
+    expect(seen).toEqual([60])
+  })
+  test("dispose cancels the pending update", () => {
+    const seen: number[] = []
+    const f = fake()
+    const t = createWidthTracker({ initial: 60, onChange: (w) => seen.push(w), scheduler: f.scheduler })
+    t.report(75)
+    t.report(70)
+    t.dispose()
+    expect(f.jobs.length).toBe(0)
+    expect(seen).toEqual([75])
+  })
+})
+
+describe("rowBudget", () => {
+  test("my own width plus what the flexible neighbour can give up", () => {
+    expect(rowBudget(31, 20, 12)).toBe(39)
+    expect(rowBudget(31, 12, 12)).toBe(31)
+  })
+  test("goes below my own width when the neighbour is squeezed under its reserve", () => {
+    expect(rowBudget(31, 0, 12)).toBe(19)
+  })
+  test("no flexible neighbour means no answer", () => {
+    expect(rowBudget(31, undefined, 12)).toBeUndefined()
+  })
+  test("never less than 1", () => {
+    expect(rowBudget(5, 0, 12)).toBe(1)
+  })
+})
+
+describe("footerMessage", () => {
+  test("the long wording when there is room", () => {
+    expect(footerMessage("login", 60)).toBe("Claude: accesso scaduto, apri claude")
+    expect(footerMessage("waiting", 60)).toBe("Claude: in attesa dei dati")
+    expect(footerMessage("unavailable", 60)).toBe("Claude: uso non disponibile")
+  })
+  test("shorter wordings as the budget shrinks, nothing when none fits", () => {
+    expect(footerMessage("login", 30)).toBe("Claude: accesso scaduto")
+    expect(footerMessage("login", 20)).toBe("accesso scaduto")
+    expect(footerMessage("login", 14)).toBeNull()
+    expect(footerMessage("waiting", 17)).toBe("Claude: in attesa")
+    expect(footerMessage("unavailable", 23)).toBe("Claude: non disponibile")
+  })
+  test("never wider than the budget", () => {
+    for (const kind of ["login", "waiting", "unavailable"] as const) {
+      for (let budget = 0; budget < 60; budget++) {
+        const text = footerMessage(kind, budget)
+        if (text !== null) expect(text.length).toBeLessThanOrEqual(budget)
+      }
+    }
+  })
+})
+
+describe("resetFit", () => {
+  const now = new Date(2026, 10, 9, 23, 51).getTime()
+  const window = { percent: 96, resetsAt: new Date(2026, 10, 10, 1, 0).getTime() }
+  test("the whole line when it fits", () => {
+    expect(resetFit(window, now, 40)).toBe("si azzera tra 1 h 9 min, mar 01:00")
+  })
+  test("loses the clock, then the first words, then gets cut", () => {
+    expect(resetFit(window, now, 33)).toBe("si azzera tra 1 h 9 min")
+    expect(resetFit(window, now, 20)).toBe("tra 1 h 9 min")
+    expect(resetFit(window, now, 8)).toBe("tra 1 h…")
+  })
+  test("texts without a clock are cut, never longer than the width", () => {
+    expect(resetFit({ percent: 1, resetsAt: null }, now, 10)).toBe("azzeramen…")
+    for (let width = 1; width < 50; width++) expect([...resetFit(window, now, width)].length).toBeLessThanOrEqual(width)
   })
 })

@@ -406,3 +406,170 @@ export function failureIt(failure: Failure): string {
       return "dati non disponibili"
   }
 }
+
+// --- size (used by the TUI) ----------------------------------------------------------------
+
+export const FOOTER_MAX_CELLS = 6
+export const DIALOG_MAX_CELLS = 20
+const DIALOG_MIN_CELLS = 5
+const DIALOG_LABEL_WIDTH = 11
+const DIALOG_RESERVED = DIALOG_LABEL_WIDTH + 6 // label, then "  " and a 4 character percentage
+const STALE_MARKER = "  (vecchio)"
+export const RESIZE_COALESCE_MS = 50
+
+export type FooterPart = { window: "five" | "week"; label: "5h" | "sett"; percent: number | null; cells: number }
+export type FooterLayout = { parts: FooterPart[]; gap: number; marker: boolean; width: number }
+
+const partText = (part: FooterPart): string => {
+  if (part.percent === null) return `${part.label} libero`
+  const pct = formatPercent(part.percent)
+  if (part.cells === 0) return `${part.label} ${pct}`
+  const bar = meter(part.percent, part.cells)
+  return `${part.label} ${bar.filled}${bar.empty} ${pct}`
+}
+
+/** The footer as one plain string; the TUI draws the same pieces with colours. */
+export function footerText(layout: FooterLayout): string {
+  return layout.parts.map(partText).join(" ".repeat(layout.gap)) + (layout.marker ? STALE_MARKER : "")
+}
+
+type FooterInput = { five: number | null; week: number | null; stale: boolean }
+
+function build(input: FooterInput, cells: number, gap: number, marker: boolean): FooterLayout {
+  const parts: FooterPart[] = [
+    { window: "five", label: "5h", percent: input.five, cells },
+    { window: "week", label: "sett", percent: input.week, cells },
+  ]
+  const layout: FooterLayout = { parts, gap, marker: marker && input.stale, width: 0 }
+  layout.width = footerText(layout).length
+  return layout
+}
+
+/**
+ * The footer item for `budget` columns. It tries, in order: full meters with the old marker, full meters,
+ * shorter and shorter bars, text only ("5h 23% sett 96%"), the one window that matters most, and
+ * finally nothing (null). It never returns something wider than the budget.
+ */
+export function footerLayout(input: FooterInput, budget: number): FooterLayout | null {
+  const room = Number.isNaN(budget) ? Infinity : budget
+  const attempts: [number, number, boolean][] = [
+    [FOOTER_MAX_CELLS, 3, true],
+    [FOOTER_MAX_CELLS, 3, false],
+    [5, 2, false],
+    [4, 2, false],
+    [3, 2, false],
+    [0, 1, false],
+  ]
+  for (const [cells, gap, marker] of attempts) {
+    const layout = build(input, cells, gap, marker)
+    if (layout.width <= room) return layout
+  }
+  const present = (["five", "week"] as const)
+    .filter((window) => input[window] !== null)
+    .sort((a, b) => (input[b] as number) - (input[a] as number) || (a === "week" ? -1 : 1))
+  const first = present[0]
+  if (!first) return null
+  const part: FooterPart = {
+    window: first,
+    label: first === "five" ? "5h" : "sett",
+    percent: input[first],
+    cells: 0,
+  }
+  const single: FooterLayout = { parts: [part], gap: 0, marker: false, width: partText(part).length }
+  return single.width <= room ? single : null
+}
+
+/** Bar length and label width for a dialog whose usable width is `width`. */
+export function dialogLayout(width: number): { cells: number; labelWidth: number } {
+  const cells = Math.min(DIALOG_MAX_CELLS, Math.max(DIALOG_MIN_CELLS, Math.floor(width) - DIALOG_RESERVED))
+  return { cells, labelWidth: DIALOG_LABEL_WIDTH }
+}
+
+/** Cuts text to `width` characters (not UTF-16 units), ending with "…" when it was longer. */
+export function fitText(text: string, width: number): string {
+  if (width <= 0) return ""
+  const chars = [...text]
+  if (chars.length <= width) return text
+  return `${chars.slice(0, width - 1).join("")}…`
+}
+
+export type Scheduler = { set: (fn: () => void, ms: number) => unknown; clear: (handle: unknown) => void }
+
+/**
+ * Turns a stream of measured widths into few updates: the first real size is applied at once, later
+ * ones are coalesced to one update per `delayMs`, and a size that is already shown does nothing.
+ */
+export function createWidthTracker(options: {
+  initial: number
+  onChange: (width: number) => void
+  delayMs?: number
+  scheduler?: Scheduler
+}) {
+  const delay = options.delayMs ?? RESIZE_COALESCE_MS
+  const scheduler: Scheduler = options.scheduler ?? {
+    set: (fn, ms) => setTimeout(fn, ms),
+    clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+  }
+  let shown = options.initial
+  let latest = options.initial
+  let measured = false
+  let handle: unknown
+  let disposed = false
+  const flush = () => {
+    handle = undefined
+    if (latest !== shown) {
+      shown = latest
+      options.onChange(latest)
+    }
+  }
+  return {
+    report(raw: number) {
+      if (disposed || !Number.isFinite(raw) || raw <= 0) return
+      const next = Math.floor(raw)
+      if (measured && next === latest) return
+      latest = next
+      if (!measured) {
+        measured = true
+        if (handle !== undefined) scheduler.clear(handle)
+        flush()
+        return
+      }
+      if (handle === undefined) handle = scheduler.set(flush, delay)
+    },
+    dispose() {
+      disposed = true
+      if (handle !== undefined) scheduler.clear(handle)
+      handle = undefined
+    },
+  }
+}
+
+/**
+ * Columns my footer item may use: its own width plus what the flexible neighbour (the path) has above
+ * `reserve`. Undefined when there is no such neighbour to measure. At least 1.
+ */
+export function rowBudget(ownWidth: number, neighbourWidth: number | undefined, reserve: number): number | undefined {
+  if (neighbourWidth === undefined) return undefined
+  return Math.max(1, Math.floor(ownWidth + neighbourWidth - reserve))
+}
+
+const MESSAGES = {
+  login: ["Claude: accesso scaduto, apri claude", "Claude: accesso scaduto", "accesso scaduto"],
+  waiting: ["Claude: in attesa dei dati", "Claude: in attesa", "in attesa"],
+  unavailable: ["Claude: uso non disponibile", "Claude: non disponibile", "non disponibile"],
+} as const
+
+/** A status line for the footer: the longest wording that fits, or null when none does. */
+export function footerMessage(kind: keyof typeof MESSAGES, budget: number): string | null {
+  const room = Number.isNaN(budget) ? Infinity : budget
+  return MESSAGES[kind].find((text) => text.length <= room) ?? null
+}
+
+/** The reset line for `width` columns: whole, then without the clock, then without "si azzera", then cut. */
+export function resetFit(window: UsageWindow, now: number, width: number): string {
+  const full = resetIt(window, now)
+  if (full.length <= width) return full
+  const noClock = full.replace(/, [a-z]{3} \d\d:\d\d$/, "")
+  if (noClock.length <= width) return noClock
+  return fitText(noClock.replace(/^si azzera /, ""), width)
+}

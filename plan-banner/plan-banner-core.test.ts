@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test"
-import { FALLBACK_KEY, bannerText, keyLabel, lastReplyAgent, shouldShowBanner } from "./plan-banner-core"
+import { FALLBACK_KEY, bannerText, keyLabel, lastReplyAgent, shouldShowBanner,
+  bannerLine,
+  createWidthTracker,
+} from "./plan-banner-core"
 
 // Message shapes copied from what OpenCode 2.2.6 returns from data.session.message.list().
 const user = { id: "m", type: "user", text: "x", files: [], agents: [] }
@@ -94,5 +97,122 @@ describe("revert", () => {
     expect(shouldShowBanner(messages)).toBe(true)
     expect(shouldShowBanner(messages, "u2")).toBe(false)
     expect(shouldShowBanner(messages, "missing")).toBe(true)
+  })
+})
+
+describe("bannerLine", () => {
+  const KEY = "Shift+Tab"
+  test("the full sentence when it fits", () => {
+    const full = bannerText(KEY)
+    expect(bannerLine(KEY, full.length)).toBe(full)
+    expect(bannerLine(KEY, 200)).toBe(full)
+  })
+  test("shorter wordings as the width shrinks", () => {
+    expect(bannerLine(KEY, 70)).toBe("Ultima risposta in Plan: premi Shift+Tab per farmi lavorare.")
+    expect(bannerLine(KEY, 45)).toBe("Ultima risposta in Plan: premi Shift+Tab.")
+    expect(bannerLine(KEY, 30)).toBe("Plan: premi Shift+Tab")
+    expect(bannerLine(KEY, 15)).toBe("Plan")
+  })
+  test("nothing when even the shortest does not fit", () => {
+    expect(bannerLine(KEY, 3)).toBeNull()
+    expect(bannerLine(KEY, 0)).toBeNull()
+  })
+  test("never wider than the width, at every width", () => {
+    for (let width = 0; width <= 120; width++) {
+      const line = bannerLine(KEY, width)
+      if (line !== null) expect(line.length).toBeLessThanOrEqual(width)
+    }
+  })
+  test("a width that is not a number counts as no limit", () => {
+    expect(bannerLine(KEY, Number.NaN)).toBe(bannerText(KEY))
+  })
+  test("the key is the one given", () => {
+    expect(bannerLine("Ctrl+P", 30)).toBe("Plan: premi Ctrl+P")
+  })
+})
+
+describe("createWidthTracker", () => {
+  const fake = () => {
+    const jobs: { fn: () => void; ms: number; id: number }[] = []
+    let id = 0
+    return {
+      jobs,
+      scheduler: {
+        set: (fn: () => void, ms: number) => {
+          jobs.push({ fn, ms, id: ++id })
+          return id
+        },
+        clear: (handle: unknown) => {
+          const at = jobs.findIndex((job) => job.id === handle)
+          if (at >= 0) jobs.splice(at, 1)
+        },
+      },
+    }
+  }
+  test("the first measurement is applied at once", () => {
+    const seen: number[] = []
+    const t = createWidthTracker({ initial: 80, onChange: (w) => seen.push(w), scheduler: fake().scheduler })
+    t.report(60)
+    expect(seen).toEqual([60])
+  })
+  test("a burst of sizes becomes one update with the last size, 50 ms later", () => {
+    const seen: number[] = []
+    const f = fake()
+    const t = createWidthTracker({ initial: 80, onChange: (w) => seen.push(w), scheduler: f.scheduler })
+    t.report(60)
+    for (const w of [59, 58, 57, 56]) t.report(w)
+    expect(seen).toEqual([60])
+    expect(f.jobs).toHaveLength(1)
+    expect(f.jobs[0]!.ms).toBe(50)
+    f.jobs[0]!.fn()
+    expect(seen).toEqual([60, 56])
+  })
+  test("the same size again does no work", () => {
+    const seen: number[] = []
+    const f = fake()
+    const t = createWidthTracker({ initial: 80, onChange: (w) => seen.push(w), scheduler: f.scheduler })
+    t.report(60)
+    t.report(60)
+    t.report(60.6)
+    expect(f.jobs).toHaveLength(0)
+    expect(seen).toEqual([60])
+  })
+  test("a burst that ends where it began changes nothing", () => {
+    const seen: number[] = []
+    const f = fake()
+    const t = createWidthTracker({ initial: 80, onChange: (w) => seen.push(w), scheduler: f.scheduler })
+    t.report(60)
+    t.report(20)
+    t.report(60)
+    f.jobs[0]?.fn()
+    expect(seen).toEqual([60])
+  })
+  test("zero, negative and NaN are ignored", () => {
+    const seen: number[] = []
+    const t = createWidthTracker({ initial: 80, onChange: (w) => seen.push(w), scheduler: fake().scheduler })
+    t.report(0)
+    t.report(-3)
+    t.report(Number.NaN)
+    expect(seen).toEqual([])
+  })
+  test("a report after dispose starts nothing", () => {
+    const seen: number[] = []
+    const f = fake()
+    const t = createWidthTracker({ initial: 80, onChange: (w) => seen.push(w), scheduler: f.scheduler })
+    t.report(60)
+    t.dispose()
+    t.report(30)
+    expect(f.jobs).toHaveLength(0)
+    expect(seen).toEqual([60])
+  })
+  test("dispose cancels the pending update", () => {
+    const seen: number[] = []
+    const f = fake()
+    const t = createWidthTracker({ initial: 80, onChange: (w) => seen.push(w), scheduler: f.scheduler })
+    t.report(60)
+    t.report(30)
+    t.dispose()
+    expect(f.jobs).toHaveLength(0)
+    expect(seen).toEqual([60])
   })
 })

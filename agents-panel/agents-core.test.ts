@@ -6,8 +6,10 @@ import {
   buildView,
   clockIt,
   createRunTracker,
+  createWidthTracker,
   displayTitle,
   fit,
+  rowLayout,
   shortModel,
   spinnerFrame,
   toolDetail,
@@ -519,9 +521,185 @@ describe("buildView, header, empty state and the row cap", () => {
     expect(view.hidden).toBe(3)
   })
 
-  test("a width below 24 is treated as 24 so nothing overflows", () => {
-    const view = buildView([child({ id: "r", running: true, title: "x".repeat(60) })], {}, NOW, 5)
-    const row = view.groups[0].rows[0]
-    expect([...`${row.mark ?? ""}${row.lead}${row.name}${row.time}`]).toHaveLength(24)
+
+})
+
+describe("rowLayout", () => {
+  test("model column and time while there is room", () => {
+    expect(rowLayout(34)).toEqual({ showModel: true, showTime: true })
+    expect(rowLayout(24)).toEqual({ showModel: true, showTime: true })
+  })
+  test("the model column goes first, below 24", () => {
+    expect(rowLayout(23)).toEqual({ showModel: false, showTime: true })
+    expect(rowLayout(14)).toEqual({ showModel: false, showTime: true })
+  })
+  test("then the time, below 14", () => {
+    expect(rowLayout(13)).toEqual({ showModel: false, showTime: false })
+    expect(rowLayout(4)).toEqual({ showModel: false, showTime: false })
+  })
+  test("a width that is not a number counts as 34", () => {
+    expect(rowLayout(Number.NaN)).toEqual({ showModel: true, showTime: true })
+    expect(rowLayout(0)).toEqual({ showModel: true, showTime: true })
+  })
+})
+
+describe("buildView, narrow and wide", () => {
+  const kids: ChildInput[] = [
+    child({ id: "wait", title: "rilettura #103", modelId: "claude-opus-5-5", running: true, permissionPending: true, createdAt: NOW - 2 * MIN }),
+    child({ id: "w1", title: "#90 allineamento molto lungo", modelId: "claude-sonnet-5-5", running: true, createdAt: NOW - 12 * MIN }),
+    child({ id: "d2", title: "#103 correzioni", modelId: "claude-sonnet-5-5", updatedAt: NOW - 20 * MIN }),
+  ]
+  const runs = {
+    w1: { startedAt: NOW - 12 * MIN, tool: "bun test --coverage" },
+    d2: { startedAt: NOW - 25 * MIN, endedAt: NOW - 20 * MIN, outcome: "error" as const },
+  }
+
+  test("at 22 columns the model column is dropped and the name gets its room", () => {
+    const out = lines(buildView(kids, runs, NOW, 22))
+    expect(out).toContain("  rilettura #103    2m")
+    expect(out).toContain("  #90 allineamen…  12m")
+    expect(out).toContain("✗ #103 correz…  20m fa")
+  })
+
+  test("at 22 columns the detail line is indented under the name", () => {
+    const out = lines(buildView(kids, runs, NOW, 22))
+    expect(out).toContain("  └ chiede un permesso")
+    expect(out).toContain("  └ bun test --covera…")
+  })
+
+  test("at 12 columns there is no time, only the name", () => {
+    const out = lines(buildView(kids, runs, NOW, 12))
+    expect(out).toContain("  rilettura…")
+    expect(out).toContain("✗ #103 corr…")
+  })
+
+  test("a failed row without model column has an empty lead, the mark takes its place", () => {
+    const row = buildView(kids, runs, NOW, 22).groups[2].rows[0]
+    expect(row.mark).toBe("✗ ")
+    expect(row.lead).toBe("")
+  })
+
+  test("a wide sidebar puts the time on the right edge and gives the name the extra room", () => {
+    const out = lines(buildView(kids, runs, NOW, 60))
+    expect(out).toContain("  Opus     " + "rilettura #103".padEnd(47) + "2m")
+    expect(out).toContain("  Sonnet   " + "#90 allineamento molto lungo".padEnd(46) + "12m")
+  })
+
+  test("no drawn line is wider than the width, at any width from 4 to 80", () => {
+    for (let width = 4; width <= 80; width++) {
+      for (const line of lines(buildView(kids, runs, NOW, width))) {
+        expect([...line].length).toBeLessThanOrEqual(width)
+      }
+    }
+  })
+
+  test("rows that show a time are exactly the width, from 14 columns up", () => {
+    for (let width = 14; width <= 80; width++) {
+      for (const group of buildView(kids, runs, NOW, width).groups)
+        for (const row of group.rows) expect([...`${row.mark ?? ""}${row.lead}${row.name}${row.time}`]).toHaveLength(width)
+    }
+  })
+
+  test("the header keeps the count on the right edge and gives way when it does not fit", () => {
+    expect(lines(buildView(kids, runs, NOW, 20))[0]).toBe("SUBAGENTI" + "2".padStart(11))
+    expect(lines(buildView(kids, runs, NOW, 6))[0]).toBe("SUBAG…")
+  })
+
+  test("group titles, the empty text and the hidden count are cut to the width", () => {
+    const small = buildView(kids, runs, NOW, 8)
+    expect(small.groups.map((g) => g.title)).toEqual(["Ti as…", "Al la…", "Finiti"])
+    expect(buildView([], {}, NOW, 8).emptyText).toBe("Nessun …")
+    const many = Array.from({ length: 13 }, (_, i) => child({ id: `r${i}`, running: true }))
+    expect(buildView(many, {}, NOW, 6).hiddenText).toBe("+3 al…")
+  })
+
+  test("a width that is not usable falls back to 34 columns", () => {
+    expect(lines(buildView(kids, runs, NOW, Number.NaN))).toEqual(lines(buildView(kids, runs, NOW, 34)))
+  })
+})
+
+describe("createWidthTracker", () => {
+  const fake = () => {
+    const jobs: { fn: () => void; ms: number; id: number }[] = []
+    let id = 0
+    return {
+      jobs,
+      scheduler: {
+        set: (fn: () => void, ms: number) => {
+          jobs.push({ fn, ms, id: ++id })
+          return id
+        },
+        clear: (handle: unknown) => {
+          const at = jobs.findIndex((job) => job.id === handle)
+          if (at >= 0) jobs.splice(at, 1)
+        },
+      },
+    }
+  }
+  test("the first measurement is applied at once", () => {
+    const seen: number[] = []
+    const t = createWidthTracker({ initial: 34, onChange: (w) => seen.push(w), scheduler: fake().scheduler })
+    t.report(38)
+    expect(seen).toEqual([38])
+  })
+  test("a burst of sizes becomes one update with the last size, 50 ms later", () => {
+    const seen: number[] = []
+    const f = fake()
+    const t = createWidthTracker({ initial: 34, onChange: (w) => seen.push(w), scheduler: f.scheduler })
+    t.report(38)
+    for (const w of [37, 36, 35, 30]) t.report(w)
+    expect(seen).toEqual([38])
+    expect(f.jobs).toHaveLength(1)
+    expect(f.jobs[0]!.ms).toBe(50)
+    f.jobs[0]!.fn()
+    expect(seen).toEqual([38, 30])
+  })
+  test("the same size again does no work", () => {
+    const seen: number[] = []
+    const f = fake()
+    const t = createWidthTracker({ initial: 34, onChange: (w) => seen.push(w), scheduler: f.scheduler })
+    t.report(38)
+    t.report(38)
+    t.report(38.6)
+    expect(f.jobs).toHaveLength(0)
+    expect(seen).toEqual([38])
+  })
+  test("a burst that ends where it began changes nothing", () => {
+    const seen: number[] = []
+    const f = fake()
+    const t = createWidthTracker({ initial: 34, onChange: (w) => seen.push(w), scheduler: f.scheduler })
+    t.report(38)
+    t.report(20)
+    t.report(38)
+    f.jobs[0]?.fn()
+    expect(seen).toEqual([38])
+  })
+  test("zero, negative and NaN are ignored", () => {
+    const seen: number[] = []
+    const t = createWidthTracker({ initial: 34, onChange: (w) => seen.push(w), scheduler: fake().scheduler })
+    t.report(0)
+    t.report(-3)
+    t.report(Number.NaN)
+    expect(seen).toEqual([])
+  })
+  test("a report after dispose starts nothing", () => {
+    const seen: number[] = []
+    const f = fake()
+    const t = createWidthTracker({ initial: 80, onChange: (w) => seen.push(w), scheduler: f.scheduler })
+    t.report(60)
+    t.dispose()
+    t.report(30)
+    expect(f.jobs).toHaveLength(0)
+    expect(seen).toEqual([60])
+  })
+  test("dispose cancels the pending update", () => {
+    const seen: number[] = []
+    const f = fake()
+    const t = createWidthTracker({ initial: 34, onChange: (w) => seen.push(w), scheduler: f.scheduler })
+    t.report(38)
+    t.report(30)
+    t.dispose()
+    expect(f.jobs).toHaveLength(0)
+    expect(seen).toEqual([38])
   })
 })

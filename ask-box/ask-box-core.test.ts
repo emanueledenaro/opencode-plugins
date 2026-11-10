@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import {
   MAX_ASK_LINES,
+  askLineCap,
+  askText,
+  createWidthTracker,
   capAsk,
   currentAsk,
   extractAsk,
@@ -199,5 +202,138 @@ describe("currentAsk on long, streaming and reverted sessions", () => {
   test("stops at the last user message without reading older replies", () => {
     const poisoned = { type: "assistant", get content(): unknown { throw new Error("read an old reply") } }
     expect(currentAsk([poisoned, { type: "user", text: "ciao" }, ask(2)])).toBe("domanda 2")
+  })
+})
+
+describe("askLineCap", () => {
+  test("8 lines in a normal sidebar, more when it is narrow so the text shown stays about the same", () => {
+    expect(askLineCap(42)).toBe(8)
+    expect(askLineCap(36)).toBe(8)
+    expect(askLineCap(32)).toBe(9)
+    expect(askLineCap(24)).toBe(12)
+  })
+  test("rounds up, so the shown text is never less than 288 characters", () => {
+    expect(askLineCap(30)).toBe(10)
+    expect(askLineCap(25)).toBe(12)
+  })
+  test("never below 8 and never above 12", () => {
+    expect(askLineCap(200)).toBe(8)
+    expect(askLineCap(3)).toBe(12)
+  })
+  test("a width that is not usable gives the default", () => {
+    expect(askLineCap(0)).toBe(MAX_ASK_LINES)
+    expect(askLineCap(Number.NaN)).toBe(MAX_ASK_LINES)
+    expect(askLineCap(-5)).toBe(MAX_ASK_LINES)
+  })
+})
+
+describe("capAsk with a line limit", () => {
+  const long = Array.from({ length: 30 }, (_, i) => `riga numero ${i}`).join("\n")
+  test("the limit is the third argument", () => {
+    expect(capAsk(long, 40, 3).split("\n")).toHaveLength(3)
+    expect(capAsk(long, 40, 3).endsWith("…")).toBe(true)
+  })
+  test("the default is still MAX_ASK_LINES", () => {
+    expect(capAsk(long, 40).split("\n")).toHaveLength(MAX_ASK_LINES)
+  })
+})
+
+describe("askText", () => {
+  test("wraps at the measured width and caps at the cap for that width", () => {
+    const text = Array.from({ length: 40 }, (_, i) => `punto ${i} della lista`).join("\n")
+    expect(askText(text, 36).split("\n")).toHaveLength(8)
+    expect(askText(text, 24).split("\n")).toHaveLength(12)
+  })
+  test("no line is wider than the width", () => {
+    const text = "Conferma se devo usare la modalità lunga con tutti i dettagli del progetto e dei file coinvolti"
+    for (let width = 5; width <= 60; width++) {
+      for (const line of askText(text, width).split("\n")) expect([...line].length).toBeLessThanOrEqual(width)
+    }
+  })
+})
+
+describe("createWidthTracker", () => {
+  const fake = () => {
+    const jobs: { fn: () => void; ms: number; id: number }[] = []
+    let id = 0
+    return {
+      jobs,
+      scheduler: {
+        set: (fn: () => void, ms: number) => {
+          jobs.push({ fn, ms, id: ++id })
+          return id
+        },
+        clear: (handle: unknown) => {
+          const at = jobs.findIndex((job) => job.id === handle)
+          if (at >= 0) jobs.splice(at, 1)
+        },
+      },
+    }
+  }
+  test("the first measurement is applied at once", () => {
+    const seen: number[] = []
+    const t = createWidthTracker({ initial: 32, onChange: (w) => seen.push(w), scheduler: fake().scheduler })
+    t.report(40)
+    expect(seen).toEqual([40])
+  })
+  test("a burst of sizes becomes one update with the last size, 50 ms later", () => {
+    const seen: number[] = []
+    const f = fake()
+    const t = createWidthTracker({ initial: 32, onChange: (w) => seen.push(w), scheduler: f.scheduler })
+    t.report(40)
+    for (const w of [39, 38, 37, 36]) t.report(w)
+    expect(seen).toEqual([40])
+    expect(f.jobs).toHaveLength(1)
+    expect(f.jobs[0]!.ms).toBe(50)
+    f.jobs[0]!.fn()
+    expect(seen).toEqual([40, 36])
+  })
+  test("the same size again does no work", () => {
+    const seen: number[] = []
+    const f = fake()
+    const t = createWidthTracker({ initial: 32, onChange: (w) => seen.push(w), scheduler: f.scheduler })
+    t.report(40)
+    t.report(40)
+    t.report(40.6)
+    expect(f.jobs).toHaveLength(0)
+    expect(seen).toEqual([40])
+  })
+  test("a burst that ends where it began changes nothing", () => {
+    const seen: number[] = []
+    const f = fake()
+    const t = createWidthTracker({ initial: 32, onChange: (w) => seen.push(w), scheduler: f.scheduler })
+    t.report(40)
+    t.report(20)
+    t.report(40)
+    f.jobs[0]?.fn()
+    expect(seen).toEqual([40])
+  })
+  test("zero, negative and NaN are ignored", () => {
+    const seen: number[] = []
+    const t = createWidthTracker({ initial: 32, onChange: (w) => seen.push(w), scheduler: fake().scheduler })
+    t.report(0)
+    t.report(-3)
+    t.report(Number.NaN)
+    expect(seen).toEqual([])
+  })
+  test("a report after dispose starts nothing", () => {
+    const seen: number[] = []
+    const f = fake()
+    const t = createWidthTracker({ initial: 80, onChange: (w) => seen.push(w), scheduler: f.scheduler })
+    t.report(60)
+    t.dispose()
+    t.report(30)
+    expect(f.jobs).toHaveLength(0)
+    expect(seen).toEqual([60])
+  })
+  test("dispose cancels the pending update", () => {
+    const seen: number[] = []
+    const f = fake()
+    const t = createWidthTracker({ initial: 32, onChange: (w) => seen.push(w), scheduler: f.scheduler })
+    t.report(40)
+    t.report(30)
+    t.dispose()
+    expect(f.jobs).toHaveLength(0)
+    expect(seen).toEqual([40])
   })
 })
