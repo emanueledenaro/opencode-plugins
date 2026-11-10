@@ -1,12 +1,20 @@
 # ask-box
 
-A read-only OpenCode 2 plugin that keeps the last thing the assistant asked you visible in the sidebar. The interface text is in Italian.
+A read-only OpenCode 2 plugin that shows in the sidebar what the assistant needs from you. The interface text is in Italian.
 
 ## What you see
 
-When an assistant reply contains a line that starts with `Serve da te:` (optionally in bold, optionally followed by a numbered list), the sidebar shows a block titled `Serve da te` with that text: markdown removed, wrapped at the measured sidebar width, at most 8 lines in a normal sidebar and up to 12 in a very narrow one so the shown text stays about the same (a cut ends with `…`).
+When the assistant's latest finished reply contains a line that starts with `Serve da te:` (optionally in bold, optionally followed by a numbered list), the sidebar shows a block titled `Serve da te` with that text: markdown removed, wrapped at the measured sidebar width, at most 8 lines in a normal sidebar and up to 12 in a very narrow one so the shown text stays about the same (a cut ends with `…`).
 
-The block disappears as soon as you send a new message after that reply. If the next reply has a new `Serve da te:` line, it shows again. The last `Serve da te:` in a reply wins. Text that comes after a blank line and is not a list is not part of the block.
+The box shows only while that request is current:
+
+- It disappears as soon as you send a new message after that reply.
+- It disappears when the latest finished reply has no `Serve da te:` line. An older request is never kept. So when nothing is needed, the assistant just leaves the line out.
+- A reply that is still streaming does not change the box; the decision stays on the last finished reply until the new one is done, so it does not flicker. A message with no text (only tool calls) is not a reply and is ignored.
+
+The last `Serve da te:` in a reply wins. Text that comes after a blank line and is not a list is not part of the block.
+
+Bold around the line is handled: `**Serve da te: x.**`, `**Serve da te:** x` and `**Serve da te**: x` all show `x.` or `x` without stray `**`. The same goes for `__` and backticks. If the bold runs over several lines, the closing marker at the end of the block is dropped. Bold inside the text (`Serve da te: a **b** c`) is kept as bold and shown as plain `a b c`.
 
 It does nothing unless your assistant writes that line. It only matches the exact words `Serve da te`.
 
