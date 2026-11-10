@@ -75,6 +75,37 @@ describe("extractAsk", () => {
   })
 })
 
+describe("bold around the marker line", () => {
+  test("whole line in bold: the trailing closer is dropped", () => {
+    expect(extractAsk("**Serve da te: niente per ora.**")).toBe("niente per ora.")
+  })
+  test("bold on the label only: text is kept as written", () => {
+    expect(extractAsk("**Serve da te:** scegli A o B")).toBe("scegli A o B")
+  })
+  test("bold on the label with the colon outside, text ending in a bold word", () => {
+    expect(extractAsk("**Serve da te**: scegli **A**")).toBe("scegli A")
+  })
+  test("a real bold in the middle of the text stays", () => {
+    expect(extractAsk("Serve da te: a **b** c")).toBe("a b c")
+    expect(extractAsk("Serve da te: **b** c")).toBe("b c")
+    expect(extractAsk("**Serve da te: a **b** c**")).toBe("a b c")
+    expect(extractAsk("Serve da te:**b** c")).toBe("b c")
+  })
+  test("bold across two lines", () => {
+    expect(extractAsk("**Serve da te: scegli\nA o B?**")).toBe("scegli\nA o B?")
+  })
+  test("a paired bold at the end of the first line is not taken for the closer of a multi-line bold", () => {
+    expect(extractAsk("**Serve da te: scegli **A**\nB**")).toBe("scegli A\nB")
+  })
+  test("underscores and backticks work like asterisks", () => {
+    expect(extractAsk("__Serve da te: niente.__")).toBe("niente.")
+    expect(extractAsk("`Serve da te: niente.`")).toBe("niente.")
+  })
+  test("bold line followed by a list", () => {
+    expect(extractAsk("**Serve da te: scegli:**\n1. A\n2. B")).toBe("scegli:\n1. A\n2. B")
+  })
+})
+
 describe("stripMarkdown", () => {
   test("bold, italic, code and links", () => {
     expect(stripMarkdown("**a** __b__ *c* `d` [e](http://x.example)")).toBe("a b c d e")
@@ -168,8 +199,12 @@ describe("currentAsk", () => {
   test("synthetic and agent-switched messages do not hide it", () => {
     expect(currentAsk([user("uno"), assistant("Serve da te: scegli"), switched, synthetic, idle])).toBe("scegli")
   })
-  test("a later assistant message without an ask keeps the earlier ask", () => {
-    expect(currentAsk([user("uno"), assistant("Serve da te: scegli"), assistant("Sto ancora lavorando.")])).toBe("scegli")
+  test("a later assistant reply without an ask hides the earlier ask", () => {
+    expect(currentAsk([user("uno"), assistant("Serve da te: scegli"), assistant("Sto ancora lavorando.")])).toBeNull()
+  })
+  test("a later message with no text (only tools) does not hide the ask", () => {
+    const tools = { type: "assistant", content: [{ type: "tool", name: "read" }] }
+    expect(currentAsk([user("uno"), assistant("Serve da te: scegli"), tools])).toBe("scegli")
   })
   test("the latest ask after the last user message wins", () => {
     expect(currentAsk([user("uno"), assistant("Serve da te: prima"), assistant("Serve da te: dopo")])).toBe("dopo")
@@ -192,6 +227,14 @@ describe("currentAsk on long, streaming and reverted sessions", () => {
   test("skips a reply that is still streaming", () => {
     const messages = [ask(1, { time: { completed: 1 } }), ask(2, { time: { created: 2 } })]
     expect(currentAsk(messages)).toBe("domanda 1")
+  })
+  test("a streaming reply without an ask does not hide the ask of the last completed one", () => {
+    const streaming = { type: "assistant", content: [{ type: "text", text: "Sto scrivendo" }], time: { created: 2 } }
+    expect(currentAsk([ask(1, { time: { completed: 1 } }), streaming])).toBe("domanda 1")
+  })
+  test("once it completes without an ask, the box is gone", () => {
+    const done = { type: "assistant", content: [{ type: "text", text: "Fatto." }], time: { created: 2, completed: 3 } }
+    expect(currentAsk([ask(1, { time: { completed: 1 } }), done])).toBeNull()
   })
   test("ignores the reverted message and everything after it", () => {
     const messages = [ask(1, { id: "m1" }), { type: "user", text: "ok", id: "m2" }, ask(3, { id: "m3" })]

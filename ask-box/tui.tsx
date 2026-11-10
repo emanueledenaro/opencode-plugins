@@ -1,5 +1,5 @@
 // TUI part of the ask-box plugin (OpenCode 2 plugin API, docs: /build/plugins/cli).
-// Keeps the last "Serve da te:" block of the assistant visible in the sidebar until the owner sends
+// Shows the "Serve da te:" block of the assistant's latest finished reply in the sidebar until the owner sends
 // a new message. Read only: it only reads data.session.message.list(). See ./README.md.
 import { Plugin } from "@opencode/plugin/tui"
 import { ErrorBoundary, Show, createSignal, onCleanup } from "solid-js"
