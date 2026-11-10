@@ -9,11 +9,13 @@ import {
   WEEKLY_THRESHOLD_PERCENT,
   createClickGate,
   createFableWatch,
+  createHoverGate,
   createWidthTracker,
   dialogLayout,
   failureIt,
   fableLevel,
   fitText,
+  hoverTone,
   isFreshSnapshot,
   footerLayout,
   FOOTER_ICON,
@@ -30,6 +32,7 @@ import {
   type Level,
   type MonitorState,
   type MousePoint,
+  type TextTone,
   type UsageWindow,
 } from "./claude-usage-core.ts"
 import { createLiveMonitor, isDisabled } from "./claude-usage.ts"
@@ -78,6 +81,14 @@ export default Plugin.define({
           ? (theme.text.feedback?.warning?.base ?? theme.text.base)
           : (theme.text.feedback?.success?.base ?? theme.text.base)
 
+    // Text colours by tone. While the mouse is over the footer item each tone is one step brighter.
+    const toneColour = (tone: TextTone) => (tone === "base" ? theme.text.base : tone === "muted" ? theme.text.muted : theme.text.faint)
+    const lifted = (tone: TextTone, hovered: boolean) => toneColour(hoverTone(tone, hovered))
+    // The hover background is the theme's own "hovered" fill for an action; no hard-coded colour.
+    const hoverFill = () => theme.background.action?.primary?.hovered
+    // Every mounted footer registers here, so opening the dialog (click or command) clears them all.
+    const hoverResets = new Set<() => void>()
+
     const monitor = createLiveMonitor()
     const [state, setState] = createSignal<MonitorState>(monitor.state)
     const [now, setNow] = createSignal(Date.now())
@@ -111,7 +122,7 @@ export default Plugin.define({
     }
 
     // One window of the footer: "5h ▰▱▱▱▱▱ 23%"; the bar is shorter when room is short.
-    const FooterPiece = (props: { part: FooterPart }) => {
+    const FooterPiece = (props: { part: FooterPart; hovered: boolean }) => {
       const percent = () => props.part.percent
       const bar = () => {
         const value = percent()
@@ -119,13 +130,13 @@ export default Plugin.define({
       }
       const fg = () => {
         const value = percent()
-        if (value === null) return theme.text.faint
+        if (value === null) return lifted("faint", props.hovered)
         return colour(props.part.window === "fable" ? fableLevel(value) : usageLevel(value))
       }
       return (
         <box flexDirection="row" flexShrink={0}>
-          <text fg={theme.text.muted} wrapMode="none">{`${props.part.label} `}</text>
-          <Show when={percent() !== null} fallback={<text fg={theme.text.faint} wrapMode="none">libero</text>}>
+          <text fg={lifted("muted", props.hovered)} wrapMode="none">{`${props.part.label} `}</text>
+          <Show when={percent() !== null} fallback={<text fg={lifted("faint", props.hovered)} wrapMode="none">libero</text>}>
             <Show when={bar()}>
               {(drawn) => (
                 <box flexDirection="row" flexShrink={0}>
@@ -133,7 +144,7 @@ export default Plugin.define({
                     <text fg={fg()} wrapMode="none">{drawn().filled}</text>
                   </Show>
                   <Show when={drawn().empty.length > 0}>
-                    <text fg={theme.text.faint} wrapMode="none">{drawn().empty}</text>
+                    <text fg={lifted("faint", props.hovered)} wrapMode="none">{drawn().empty}</text>
                   </Show>
                 </box>
               )}
@@ -175,9 +186,17 @@ export default Plugin.define({
         }
       }
       renderer.on?.("resize", onResize)
+      // Hover: the mouse is over the item. Terminals send no event when the pointer leaves their window,
+      // so a highlight can stay until the next mouse event or a focus change (blur clears it).
+      const [hovered, setHovered] = createSignal(false)
+      const hover = createHoverGate(setHovered)
+      hoverResets.add(hover.reset)
+      renderer.on?.("blur", hover.reset)
       const check = setInterval(measure, LAYOUT_CHECK_MS)
       onCleanup(() => {
         renderer.off?.("resize", onResize)
+        renderer.off?.("blur", hover.reset)
+        hoverResets.delete(hover.reset)
         if (afterResize !== undefined) clearTimeout(afterResize)
         clearInterval(check)
         tracker.dispose()
@@ -196,7 +215,7 @@ export default Plugin.define({
         ),
       )
       const message = (kind: "login" | "waiting") => footerMessage(kind, budget())
-      const iconColour = (tone: IconTone) => (tone === "faint" ? theme.text.faint : colour(tone))
+      const iconColour = (tone: IconTone) => (tone === "faint" ? lifted("faint", hovered()) : colour(tone))
       // A click (press and release on the footer, main button) opens the same dialog as /claude-usage.
       // The box is not focusable, so the prompt keeps the keyboard focus, and the press is not consumed,
       // so text selection elsewhere works as before.
@@ -212,6 +231,10 @@ export default Plugin.define({
           flexShrink={0}
           onMouseDown={(event: unknown) => clicks.down(pointOf(event))}
           onMouseUp={(event: unknown) => clicks.up(pointOf(event))}
+          onMouseOver={() => hover.enter()}
+          onMouseMove={() => hover.enter()}
+          onMouseOut={() => hover.leave()}
+          backgroundColor={hovered() ? hoverFill() : undefined}
           ref={(el: Node) => {
             box = el
             el.onSizeChange = () => queueMicrotask(measure)
@@ -232,12 +255,12 @@ export default Plugin.define({
                           <Show when={index() > 0}>
                             <text wrapMode="none">{" ".repeat(drawn().gap)}</text>
                           </Show>
-                          <FooterPiece part={part} />
+                          <FooterPiece part={part} hovered={hovered()} />
                         </>
                       )}
                     </For>
                     <Show when={drawn().marker}>
-                      <text fg={theme.text.faint} wrapMode="none">{"  (vecchio)"}</text>
+                      <text fg={lifted("faint", hovered())} wrapMode="none">{"  (vecchio)"}</text>
                     </Show>
                   </box>
                     }
@@ -255,7 +278,7 @@ export default Plugin.define({
             </Match>
             <Match when={!state().snapshot}>
               <Show when={message("waiting")}>
-                {(text) => <text fg={theme.text.faint} wrapMode="none">{text()}</text>}
+                {(text) => <text fg={lifted("faint", hovered())} wrapMode="none">{text()}</text>}
               </Show>
             </Match>
           </Switch>
@@ -370,6 +393,7 @@ export default Plugin.define({
 
     // Opens the dialog and refreshes the numbers: the /claude-usage command and a click on the footer both call this.
     const openUsage = async () => {
+      for (const reset of hoverResets) reset()
       setNow(Date.now())
       context.ui.dialog.set({ size: "medium", centered: true })
       context.ui.dialog.show(() => (
