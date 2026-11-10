@@ -529,17 +529,18 @@ const SEVERITY: Record<Level, number> = { ok: 0, warn: 1, high: 2 }
 
 /**
  * The colour of the one-character icon: the worst level among the windows that are shown (red beats
- * yellow beats green, each window by its own thresholds, Fable included). Old numbers (stale) and no
- * numbers at all give "faint": the icon then says "there is something here, but do not trust it".
+ * yellow beats green, each window by its own thresholds, Fable included). No numbers at all give "faint".
+ * Old numbers (stale) are faint too, unless one of them is red: a red warning stays red even when the
+ * last refresh failed, like the stale bars that keep their colours next to "(vecchio)".
  */
 export function iconTone(input: FooterInput): IconTone {
-  if (input.stale) return "faint"
   const levels: Level[] = []
   if (input.five !== null) levels.push(usageLevel(input.five))
   if (input.week !== null) levels.push(usageLevel(input.week))
   if (input.fable != null) levels.push(fableLevel(input.fable))
   if (levels.length === 0) return "faint"
-  return levels.reduce((worst, level) => (SEVERITY[level] > SEVERITY[worst] ? level : worst))
+  const worst = levels.reduce((top, level) => (SEVERITY[level] > SEVERITY[top] ? level : top))
+  return input.stale && worst !== "high" ? "faint" : worst
 }
 
 /**

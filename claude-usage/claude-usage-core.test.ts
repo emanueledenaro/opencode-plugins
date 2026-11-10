@@ -643,8 +643,10 @@ describe("iconTone", () => {
     expect(iconTone({ five: null, week: 10, stale: false })).toBe("ok")
     expect(iconTone({ five: null, week: 10, fable: null, stale: false })).toBe("ok")
   })
-  test("old numbers are faint, whatever they say", () => {
-    expect(iconTone({ five: 99, week: 99, fable: 99, stale: true })).toBe("faint")
+  test("old numbers are faint, unless one of them is red", () => {
+    expect(iconTone({ five: 99, week: 99, fable: 99, stale: true })).toBe("high")
+    expect(iconTone({ five: null, week: 75, fable: 10, stale: true })).toBe("faint")
+    expect(iconTone({ five: null, week: 10, fable: 10, stale: true })).toBe("faint")
   })
   test("no numbers at all is faint", () => {
     expect(iconTone({ five: null, week: null, stale: false })).toBe("faint")

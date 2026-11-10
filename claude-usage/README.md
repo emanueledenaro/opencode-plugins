@@ -9,7 +9,7 @@ A read-only OpenCode 2 plugin that shows how much of your Claude subscription yo
 - Above 90% weekly, one warning toast the first time it crosses.
 - When the plan reports a Fable limit, a third meter follows `sett`: `fable ▰▱▱▱▱▱ 12%`, the separate weekly Fable limit. Green under 50%, yellow from 50%, red from 80%. The 80% is this plugin's own stop line (my rule that agents stop using Fable there), not a limit set by Anthropic. One warning toast says so the first time it crosses (`Fable all'80% settimanale: niente più Fable per gli agenti`), and again only after Fable has dropped back under 80%. A poll that does not report Fable at all does not count as a drop. Toasts (this one and the 90% weekly one) only come from numbers fetched in the current session: after `/reload` or in a new window the cached numbers show in the footer but do not toast again. When the plan reports no Fable limit the meter is not drawn and nothing is shown as an error. Fable is never dropped to make room: it is the number that decides whether agents may use Fable, so it is part of the icon colour too.
 - `/claude-usage` (alias `/usage`, also in the Ctrl+P palette, or a click on the footer) refreshes and opens a dialog with the windows (5 hours, week and, when reported, Fable), when each one resets, and the last error if there was one.
-- `(vecchio)` after the meters (or a faint icon) means the last refresh failed and the numbers are old. `accesso scaduto, apri claude` means the Claude Code login has expired.
+- `(vecchio)` after the meters (or a faint icon; a red icon stays red even when old) means the last refresh failed and the numbers are old. `accesso scaduto, apri claude` means the Claude Code login has expired.
 
 ## Install
 
