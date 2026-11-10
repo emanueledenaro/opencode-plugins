@@ -4,6 +4,7 @@ import {
   fableLevel,
   fableOverThreshold,
   createFableWatch,
+  isFreshSnapshot,
   FABLE_TOAST,
   meter,
   footerLayout,
@@ -121,6 +122,19 @@ describe("parseUsage: Fable weekly limit", () => {
       expect(snapshot?.sevenDay?.percent).toBe(20)
     }
   })
+  test("the name must be Fable: spaces and case are ignored, other names are not", () => {
+    const named = (display_name: string) => parseUsage(withLimits([fableEntry(9, { scope: { model: { display_name } } })]), NOW)?.fable
+    expect(named("  FABLE ")?.percent).toBe(9)
+    expect(named("fable")?.percent).toBe(9)
+    expect(named("Not Fable")).toBeNull()
+    expect(named("Fableish")).toBeNull()
+    expect(named("")).toBeNull()
+  })
+  test("with several valid Fable entries the highest percent wins, in any order", () => {
+    expect(parseUsage(withLimits([fableEntry(10), fableEntry(70), fableEntry(30)]), NOW)?.fable?.percent).toBe(70)
+    expect(parseUsage(withLimits([fableEntry(70), fableEntry(10)]), NOW)?.fable?.percent).toBe(70)
+    expect(parseUsage(withLimits([fableEntry(10), fableEntry("bad"), fableEntry(20)]), NOW)?.fable?.percent).toBe(20)
+  })
   test("a broken entry does not hide a good one after it", () => {
     expect(parseUsage(withLimits([fableEntry("bad"), fableEntry(33)]), NOW)?.fable?.percent).toBe(33)
   })
@@ -169,6 +183,24 @@ describe("Fable toast", () => {
     const crossed = createFableWatch()
     expect(crossed(at(null))).toBe(false)
     expect(crossed(null)).toBe(false)
+  })
+  test("a poll without the Fable entry does not re-arm the toast", () => {
+    const crossed = createFableWatch()
+    expect(crossed(at(90))).toBe(true)
+    expect(crossed(at(null))).toBe(false)
+    expect(crossed(null)).toBe(false)
+    expect(crossed(at(90))).toBe(false) // still the same crossing
+    expect(crossed(at(5))).toBe(false)
+    expect(crossed(at(null))).toBe(false)
+    expect(crossed(at(90))).toBe(true) // a real drop and a new crossing
+  })
+  test("cached numbers are not fresh, numbers fetched in this session are", () => {
+    const started = NOW + 1000
+    expect(isFreshSnapshot(parseUsage(usageBody(1, 2), NOW), started)).toBe(false) // read from the cache file
+    expect(isFreshSnapshot(parseUsage(usageBody(1, 2), started - 1), started)).toBe(false)
+    expect(isFreshSnapshot(parseUsage(usageBody(1, 2), started), started)).toBe(true)
+    expect(isFreshSnapshot(parseUsage(usageBody(1, 2), started + 5000), started)).toBe(true)
+    expect(isFreshSnapshot(null, started)).toBe(false)
   })
   test("the text is Italian and names the line", () => {
     expect(FABLE_TOAST).toBe("Fable all'80% settimanale: niente più Fable per gli agenti")

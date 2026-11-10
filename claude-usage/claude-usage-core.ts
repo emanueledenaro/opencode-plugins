@@ -75,8 +75,10 @@ function makeWindow(utilization: unknown, resets_at: unknown): UsageWindow | nul
 // The Fable weekly limit is an entry of `limits` (undocumented):
 //   { kind: "weekly_scoped", percent: 2, resets_at: "...", scope: { model: { display_name: "Fable" } } }
 // `percent` is the share of the Fable limit itself (0 to 100), not of the whole week.
+// If several valid Fable entries exist, the one with the highest percent wins.
 function parseFable(limits: unknown): UsageWindow | null {
   if (!Array.isArray(limits)) return null
+  let best: UsageWindow | null = null
   for (const entry of limits) {
     if (typeof entry !== "object" || entry === null) continue
     const { kind, percent, resets_at, scope } = entry as {
@@ -86,11 +88,11 @@ function parseFable(limits: unknown): UsageWindow | null {
       scope?: { model?: { display_name?: unknown } | null } | null
     }
     const name = scope?.model?.display_name
-    if (kind !== "weekly_scoped" || typeof name !== "string" || !/fable/i.test(name)) continue
+    if (kind !== "weekly_scoped" || typeof name !== "string" || name.trim().toLowerCase() !== "fable") continue
     const window = makeWindow(percent, resets_at)
-    if (window) return window
+    if (window && (best === null || window.percent > best.percent)) best = window
   }
-  return null
+  return best
 }
 
 // Response of GET /api/oauth/usage (undocumented). Returns null when neither window is present.
@@ -114,15 +116,23 @@ export function fableOverThreshold(snapshot: UsageSnapshot | null): boolean {
   return (snapshot?.fable?.percent ?? 0) >= FABLE_STOP_PERCENT
 }
 
+/** True when the numbers were fetched at or after `startedAt`, not just read from the cache file. */
+export function isFreshSnapshot(snapshot: UsageSnapshot | null, startedAt: number): boolean {
+  return snapshot !== null && snapshot.fetchedAt >= startedAt
+}
+
 export const FABLE_TOAST = `Fable all'${FABLE_STOP_PERCENT}% settimanale: niente più Fable per gli agenti`
 
 /**
  * Says true once each time Fable goes from under the stop line to over it, and again only after it
  * has gone back under (a new week). Starts as "under", so a first reading already over also fires once.
+ * A reading with no Fable entry says nothing and keeps what it knew, so a poll that lacks the entry
+ * does not make the next one look like a new crossing.
  */
 export function createFableWatch() {
   let wasOver = false
   return (snapshot: UsageSnapshot | null): boolean => {
+    if (snapshot?.fable == null) return false
     const over = fableOverThreshold(snapshot)
     const crossed = over && !wasOver
     wasOver = over

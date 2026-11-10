@@ -13,6 +13,7 @@ import {
   failureIt,
   fableLevel,
   fitText,
+  isFreshSnapshot,
   footerLayout,
   footerMessage,
   formatPercent,
@@ -62,6 +63,9 @@ export default Plugin.define({
   async setup(context) {
     if (isDisabled()) return
 
+    // A toast is only for numbers fetched in this session: cached numbers shown after a /reload or in a
+    // new window must not repeat a warning that was already given.
+    const startedAt = Date.now()
     const theme = context.theme
     const colour = (level: Level) =>
       level === "high"
@@ -78,11 +82,14 @@ export default Plugin.define({
     const fableCrossed = createFableWatch()
     const stopListening = monitor.subscribe((next) => {
       setState(next)
-      if (fableCrossed(next.snapshot)) {
+      const fresh = isFreshSnapshot(next.snapshot, startedAt)
+      // The watches always run so they track the state; only fresh numbers may show a toast.
+      const fableNow = fableCrossed(next.snapshot)
+      if (fableNow && fresh) {
         context.ui.toast.show({ title: "Abbonamento Claude", message: FABLE_TOAST, variant: "warning", duration: 8000 })
       }
       const over = weeklyOverThreshold(next.snapshot)
-      if (over && !warned && next.snapshot?.sevenDay) {
+      if (over && !warned && fresh && next.snapshot?.sevenDay) {
         context.ui.toast.show({
           title: "Abbonamento Claude",
           message: `Settimana al ${formatPercent(next.snapshot.sevenDay.percent)}: sei nella riserva del ${100 - WEEKLY_THRESHOLD_PERCENT}%.`,
