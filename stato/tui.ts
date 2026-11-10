@@ -19,6 +19,7 @@ export default Plugin.define({
         new TextRenderable(renderer, {
           content,
           wrapMode: "word",
+          flexShrink: 0,
           ...(fg === undefined ? {} : { fg: fg as never }),
         }),
       theme: () => context.theme as never,
