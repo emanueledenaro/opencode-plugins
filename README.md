@@ -9,6 +9,7 @@ Small local plugins for OpenCode 2. Each folder is one plugin: point OpenCode at
 | [plan-banner](plan-banner/) | Warns above the prompt when the assistant's last reply ran under the Plan agent. Read only. |
 | [quote](quote/) | Highlight text in the chat, press `ctrl+y`, and it is attached as a quote to your next message, with your comment underneath. Italian interface. |
 | [agents-panel](agents-panel/) | Sidebar list of the session's background subagents: title, state (running, finished, error, waiting for permission) and how long ago. Read only. |
+| [apple-theme](apple-theme/) | Not a plugin: a colour theme with the macOS system colours, dark and light, with a transparent background. |
 | [notify](notify/) | A notification and a short sound when the terminal is not focused and OpenCode finished a reply, asks a permission or waits for an answer. At most one per 20 s. |
 | [token-rate](token-rate/) | Shows the last reply's output speed (`42 tok/s`) beside the other footer items, and logs each measurement. |
 
