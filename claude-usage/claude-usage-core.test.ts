@@ -9,6 +9,9 @@ import {
   meter,
   footerLayout,
   footerText,
+  iconTone,
+  createClickGate,
+  FOOTER_ICON,
   dialogLayout,
   fitText,
   createWidthTracker,
@@ -509,63 +512,69 @@ describe("footerLayout", () => {
     const layout = footerLayout(both, 60)!
     expect(footerText(layout)).toBe("5h ▰▱▱▱▱▱ 23%   sett ▰▰▰▰▰▰ 96%")
     expect(layout.width).toBe(31)
+    expect(layout.icon).toBeUndefined()
     expect(FOOTER_MAX_CELLS).toBe(6)
   })
 
   test("the old marker is added only while there is room for it", () => {
     const stale = { ...both, stale: true }
-    expect(ROW(footerLayout(stale, 60))).toBe("5h ▰▱▱▱▱▱ 23%   sett ▰▰▰▰▰▰ 96%  (vecchio)")
+    expect(ROW(footerLayout(stale, 42))).toBe("5h ▰▱▱▱▱▱ 23%   sett ▰▰▰▰▰▰ 96%  (vecchio)")
     expect(ROW(footerLayout(stale, 41))).toBe("5h ▰▱▱▱▱▱ 23%   sett ▰▰▰▰▰▰ 96%")
   })
 
-  test("shorter bars come before text only", () => {
+  test("shorter bars come before the icon", () => {
     expect(ROW(footerLayout(both, 30))).toBe("5h ▰▱▱▱▱ 23%  sett ▰▰▰▰▰ 96%")
     expect(ROW(footerLayout(both, 26))).toBe("5h ▰▱▱▱ 23%  sett ▰▰▰▰ 96%")
     expect(ROW(footerLayout(both, 24))).toBe("5h ▰▱▱ 23%  sett ▰▰▰ 96%")
   })
 
-  test("text only, then one window, then nothing", () => {
-    expect(ROW(footerLayout(both, 21))).toBe("5h 23% sett 96%")
-    expect(ROW(footerLayout(both, 15))).toBe("5h 23% sett 96%")
-    expect(ROW(footerLayout(both, 14))).toBe("sett 96%")
-    expect(ROW(footerLayout({ five: 99, week: 40, stale: false }, 9))).toBe("5h 99%")
-    expect(footerLayout(both, 7)).toBeNull()
+  test("when the shortest bars do not fit, one icon; under 1 column, nothing", () => {
+    expect(ROW(footerLayout(both, 23))).toBe(FOOTER_ICON)
+    expect(footerLayout(both, 23)!.width).toBe(1)
+    expect(ROW(footerLayout(both, 1))).toBe(FOOTER_ICON)
     expect(footerLayout(both, 0)).toBeNull()
+    expect(footerLayout(both, -3)).toBeNull()
   })
 
-  test("never wider than the budget, at every budget", () => {
-    for (const data of [both, { five: 100, week: 100, stale: true }, { five: 5, week: null, stale: false }]) {
-      for (let budget = 0; budget <= 60; budget++) {
-        const layout = footerLayout(data, budget)
-        if (layout) {
-          expect(layout.width).toBeLessThanOrEqual(budget)
-          expect(footerText(layout).length).toBe(layout.width)
-        }
-      }
+  test("there is no text-only or single-window row any more", () => {
+    for (let budget = 1; budget <= 80; budget++) {
+      const row = ROW(footerLayout({ five: 23, week: 96, fable: 12, stale: false }, budget))!
+      expect(row === FOOTER_ICON || row.includes("▰") || row.includes("▱")).toBe(true)
     }
-  })
-
-  test("the budget only ever removes things, never reorders them", () => {
-    let last = Infinity
-    for (let budget = 60; budget >= 0; budget--) {
-      const width = footerLayout({ five: 50, week: 50, stale: true }, budget)?.width ?? 0
-      expect(width).toBeLessThanOrEqual(last)
-      last = width
-    }
-  })
-
-  test("a missing window says libero and keeps the other meter", () => {
-    expect(ROW(footerLayout({ five: null, week: 96, stale: false }, 60))).toBe("5h libero   sett ▰▰▰▰▰▰ 96%")
-    expect(ROW(footerLayout({ five: 23, week: null, stale: false }, 14))).toBe("5h 23%")
-  })
-
-  test("both windows missing says libero twice, and nothing when that does not fit", () => {
-    expect(ROW(footerLayout({ five: null, week: null, stale: false }, 60))).toBe("5h libero   sett libero")
-    expect(footerLayout({ five: null, week: null, stale: false }, 10)).toBeNull()
   })
 
   test("a budget that is not a number counts as no limit", () => {
     expect(ROW(footerLayout(both, Number.NaN))).toBe("5h ▰▱▱▱▱▱ 23%   sett ▰▰▰▰▰▰ 96%")
+  })
+})
+
+describe("footerLayout without a 5-hour window", () => {
+  const noFive = { five: null, week: 96, stale: false }
+
+  test("5h is not drawn at all, never as libero", () => {
+    const layout = footerLayout(noFive, 60)!
+    expect(footerText(layout)).toBe("sett ▰▰▰▰▰▰ 96%")
+    expect(layout.parts.map((part) => part.window)).toEqual(["week"])
+    for (let budget = 0; budget <= 80; budget++) {
+      const row = ROW(footerLayout({ ...noFive, fable: 12 }, budget)) ?? ""
+      expect(row).not.toContain("5h")
+      expect(row).not.toContain("libero")
+    }
+  })
+  test("the 5-hour window is still drawn when it is reported", () => {
+    expect(ROW(footerLayout({ five: 0, week: 96, stale: false }, 60))).toBe("5h ▱▱▱▱▱▱ 0%   sett ▰▰▰▰▰▰ 96%")
+  })
+  test("a missing week still says libero, next to the 5-hour meter", () => {
+    expect(ROW(footerLayout({ five: 23, week: null, stale: false }, 60))).toBe("5h ▰▱▱▱▱▱ 23%   sett libero")
+    expect(ROW(footerLayout({ five: null, week: null, stale: false }, 60))).toBe("sett libero")
+  })
+  test("shrink order is the same: marker, full, shorter bars, icon", () => {
+    const stale = { ...noFive, stale: true }
+    expect(ROW(footerLayout(stale, 26))).toBe("sett ▰▰▰▰▰▰ 96%  (vecchio)")
+    expect(ROW(footerLayout(stale, 25))).toBe("sett ▰▰▰▰▰▰ 96%")
+    expect(ROW(footerLayout(noFive, 14))).toBe("sett ▰▰▰▰▰ 96%")
+    expect(ROW(footerLayout(noFive, 12))).toBe("sett ▰▰▰ 96%")
+    expect(ROW(footerLayout(noFive, 11))).toBe(FOOTER_ICON)
   })
 })
 
@@ -583,14 +592,13 @@ describe("footerLayout with Fable", () => {
     expect(ROW(footerLayout({ five: 23, week: 96, stale: false }, 80))).toBe(FULL)
     expect(ROW(footerLayout({ ...all, fable: null }, 80))).toBe(FULL)
   })
-  test("Fable stays: the bars get shorter first, then text only, and Fable goes last", () => {
+  test("every window stays while the bars get shorter; then the icon", () => {
     expect(ROW(footerLayout(all, 50))).toBe(`${FULL}   fable ▰▱▱▱▱▱ 12%`)
     expect(ROW(footerLayout(all, 49))).toBe("5h ▰▱▱▱▱ 23%  sett ▰▰▰▰▰ 96%  fable ▰▱▱▱▱ 12%")
     expect(ROW(footerLayout(all, 44))).toBe("5h ▰▱▱▱ 23%  sett ▰▰▰▰ 96%  fable ▱▱▱▱ 12%")
-    expect(ROW(footerLayout(all, 41))).toBe("5h ▰▱▱ 23%  sett ▰▰▰ 96%  fable ▱▱▱ 12%")
-    expect(ROW(footerLayout(all, 38))).toBe("5h 23% sett 96% fable 12%")
-    expect(ROW(footerLayout(all, 25))).toBe("5h 23% sett 96% fable 12%")
-    expect(ROW(footerLayout(all, 24))).toBe("5h 23% sett 96%")
+    expect(ROW(footerLayout(all, 39))).toBe("5h ▰▱▱ 23%  sett ▰▰▰ 96%  fable ▱▱▱ 12%")
+    expect(ROW(footerLayout(all, 38))).toBe(FOOTER_ICON)
+    expect(ROW(footerLayout(all, 1))).toBe(FOOTER_ICON)
   })
   test("the old marker goes before anything else", () => {
     const stale = { ...all, stale: true }
@@ -598,14 +606,136 @@ describe("footerLayout with Fable", () => {
     expect(ROW(footerLayout(stale, 60))).toBe(`${FULL}   fable ▰▱▱▱▱▱ 12%`)
     expect(ROW(footerLayout(stale, 49))).toBe("5h ▰▱▱▱▱ 23%  sett ▰▰▰▰▰ 96%  fable ▰▱▱▱▱ 12%")
   })
-  test("never wider than the budget, never reordered, at every budget", () => {
-    let last = Infinity
-    for (let budget = 70; budget >= 0; budget--) {
-      const layout = footerLayout({ five: 50, week: 50, fable: 85, stale: true }, budget)
-      if (layout) expect(layout.width).toBeLessThanOrEqual(budget)
-      expect(layout?.width ?? 0).toBeLessThanOrEqual(last)
-      last = layout?.width ?? 0
+})
+
+describe("iconTone", () => {
+  const base = { five: 10, week: 10, fable: 10, stale: false }
+
+  test("green when every window is green", () => {
+    expect(iconTone(base)).toBe("ok")
+  })
+  test("each window alone can turn it red", () => {
+    expect(iconTone({ ...base, five: 91 })).toBe("high")
+    expect(iconTone({ ...base, week: 91 })).toBe("high")
+    expect(iconTone({ ...base, fable: 80 })).toBe("high")
+  })
+  test("each window alone can turn it yellow", () => {
+    expect(iconTone({ ...base, five: 70 })).toBe("warn")
+    expect(iconTone({ ...base, week: 70 })).toBe("warn")
+    expect(iconTone({ ...base, fable: 50 })).toBe("warn")
+  })
+  test("red beats yellow beats green", () => {
+    expect(iconTone({ five: 10, week: 75, fable: 85, stale: false })).toBe("high")
+    expect(iconTone({ five: 95, week: 75, fable: 10, stale: false })).toBe("high")
+    expect(iconTone({ five: 10, week: 75, fable: 10, stale: false })).toBe("warn")
+  })
+  test("ties give that level", () => {
+    expect(iconTone({ five: 75, week: 80, fable: 55, stale: false })).toBe("warn")
+    expect(iconTone({ five: 95, week: 99, fable: 90, stale: false })).toBe("high")
+  })
+  test("Fable uses its own thresholds, not the weekly ones", () => {
+    expect(iconTone({ five: null, week: 60, fable: 49, stale: false })).toBe("ok")
+    expect(iconTone({ five: null, week: 60, fable: 50, stale: false })).toBe("warn")
+    expect(iconTone({ five: null, week: 60, fable: 80, stale: false })).toBe("high")
+    expect(iconTone({ five: null, week: 85, fable: null, stale: false })).toBe("warn")
+  })
+  test("a window that is not reported does not count", () => {
+    expect(iconTone({ five: null, week: 10, stale: false })).toBe("ok")
+    expect(iconTone({ five: null, week: 10, fable: null, stale: false })).toBe("ok")
+  })
+  test("old numbers are faint, whatever they say", () => {
+    expect(iconTone({ five: 99, week: 99, fable: 99, stale: true })).toBe("faint")
+  })
+  test("no numbers at all is faint", () => {
+    expect(iconTone({ five: null, week: null, stale: false })).toBe("faint")
+  })
+  test("the icon layout carries the tone", () => {
+    expect(footerLayout({ five: 10, week: 95, stale: false }, 5)!.icon).toBe("high")
+    expect(footerLayout({ five: 10, week: 10, fable: 55, stale: false }, 5)!.icon).toBe("warn")
+    expect(footerLayout({ five: 10, week: 10, stale: true }, 5)!.icon).toBe("faint")
+  })
+})
+
+describe("footer widths, brute force", () => {
+  const percents = [null, 0, 23, 100]
+  const fables = [undefined, null, 0, 12, 100]
+  test("never wider than the budget, and never wider when the budget shrinks", () => {
+    for (const five of percents) {
+      for (const week of percents) {
+        for (const fable of fables) {
+          for (const stale of [true, false]) {
+            let last = Infinity
+            for (let budget = 80; budget >= 0; budget--) {
+              const layout = footerLayout({ five, week, fable, stale }, budget)
+              const width = layout?.width ?? 0
+              if (layout) {
+                expect(width).toBeLessThanOrEqual(budget)
+                expect(footerText(layout).length).toBe(width)
+                expect(footerText(layout)).not.toContain("\n")
+              }
+              // From one column up there is always something to click; under that, nothing.
+              expect(layout === null).toBe(budget < 1)
+              expect(width).toBeLessThanOrEqual(last)
+              last = width
+            }
+          }
+        }
+      }
     }
+  })
+})
+
+describe("createClickGate", () => {
+  const make = () => {
+    let clicks = 0
+    return { gate: createClickGate(() => clicks++), count: () => clicks }
+  }
+
+  test("a press and a release on the same cell is one click", () => {
+    const { gate, count } = make()
+    gate.down({ button: 0, x: 60, y: 26 })
+    gate.up({ button: 0, x: 60, y: 26 })
+    expect(count()).toBe(1)
+  })
+  test("a release alone is not a click (the press started elsewhere)", () => {
+    const { gate, count } = make()
+    gate.up({ button: 0, x: 60, y: 26 })
+    expect(count()).toBe(0)
+  })
+  test("only the main button clicks", () => {
+    const { gate, count } = make()
+    gate.down({ button: 2, x: 60, y: 26 })
+    gate.up({ button: 2, x: 60, y: 26 })
+    gate.down({ button: 0, x: 60, y: 26 })
+    gate.up({ button: 2, x: 60, y: 26 })
+    gate.down({ button: 2, x: 60, y: 26 })
+    gate.up({ button: 0, x: 60, y: 26 })
+    expect(count()).toBe(0)
+  })
+  test("a drag across the footer (a text selection) is not a click", () => {
+    const { gate, count } = make()
+    gate.down({ button: 0, x: 60, y: 26 })
+    gate.up({ button: 0, x: 75, y: 26 })
+    gate.down({ button: 0, x: 60, y: 26 })
+    gate.up({ button: 0, x: 60, y: 27 })
+    expect(count()).toBe(0)
+  })
+  test("each click needs its own press, and cancel disarms", () => {
+    const { gate, count } = make()
+    gate.down()
+    gate.up()
+    gate.up()
+    expect(count()).toBe(1)
+    gate.down()
+    gate.cancel()
+    gate.up()
+    expect(count()).toBe(1)
+  })
+  test("a position that is not reported counts as the same cell", () => {
+    const { gate, count } = make()
+    gate.down({ button: 0 })
+    gate.up({ button: 0 })
+    expect(count()).toBe(1)
   })
 })
 

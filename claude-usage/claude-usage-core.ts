@@ -491,70 +491,107 @@ export type FooterPart = {
   percent: number | null
   cells: number
 }
-export type FooterLayout = { parts: FooterPart[]; gap: number; marker: boolean; width: number }
+// `icon` is set only for the one-character fallback: its colour (a level, or "faint" when the numbers
+// are old or there is nothing to judge).
+export type IconTone = Level | "faint"
+export type FooterLayout = { parts: FooterPart[]; gap: number; marker: boolean; width: number; icon?: IconTone }
+
+export const FOOTER_ICON = "◉"
 
 const partText = (part: FooterPart): string => {
   if (part.percent === null) return `${part.label} libero`
-  const pct = formatPercent(part.percent)
-  if (part.cells === 0) return `${part.label} ${pct}`
   const bar = meter(part.percent, part.cells)
-  return `${part.label} ${bar.filled}${bar.empty} ${pct}`
+  return `${part.label} ${bar.filled}${bar.empty} ${formatPercent(part.percent)}`
 }
 
 /** The footer as one plain string; the TUI draws the same pieces with colours. */
 export function footerText(layout: FooterLayout): string {
+  if (layout.icon !== undefined) return FOOTER_ICON
   return layout.parts.map(partText).join(" ".repeat(layout.gap)) + (layout.marker ? STALE_MARKER : "")
 }
 
 // `fable` is optional: absent or null means the plan reports no Fable limit, and the meter is not drawn.
+// `five` null means the plan reports no 5-hour window: it is not drawn either. `week` null still says "libero".
 type FooterInput = { five: number | null; week: number | null; stale: boolean; fable?: number | null }
 
-function build(input: FooterInput, cells: number, gap: number, marker: boolean, withFable: boolean): FooterLayout {
-  const parts: FooterPart[] = [
-    { window: "five", label: "5h", percent: input.five, cells },
-    { window: "week", label: "sett", percent: input.week, cells },
-  ]
-  if (withFable && input.fable != null) parts.push({ window: "fable", label: "fable", percent: input.fable, cells })
+function build(input: FooterInput, cells: number, gap: number, marker: boolean): FooterLayout {
+  const parts: FooterPart[] = []
+  // No 5-hour window reported (Ultra never has one): the meter is not drawn, not shown as "libero".
+  if (input.five !== null) parts.push({ window: "five", label: "5h", percent: input.five, cells })
+  parts.push({ window: "week", label: "sett", percent: input.week, cells })
+  if (input.fable != null) parts.push({ window: "fable", label: "fable", percent: input.fable, cells })
   const layout: FooterLayout = { parts, gap, marker: marker && input.stale, width: 0 }
   layout.width = footerText(layout).length
   return layout
 }
 
+const SEVERITY: Record<Level, number> = { ok: 0, warn: 1, high: 2 }
+
 /**
- * The footer item for `budget` columns. It tries, in order: full meters with the old marker, full meters,
- * shorter and shorter bars, text only ("5h 23% sett 96% fable 12%"), all of these with the Fable meter
- * when there is one; then text only without Fable, the one window that matters most, and finally
- * nothing (null). Fable stays as long as the text-only row fits, because it is the number that decides
- * whether agents may use Fable. It never returns something wider than the budget.
+ * The colour of the one-character icon: the worst level among the windows that are shown (red beats
+ * yellow beats green, each window by its own thresholds, Fable included). Old numbers (stale) and no
+ * numbers at all give "faint": the icon then says "there is something here, but do not trust it".
+ */
+export function iconTone(input: FooterInput): IconTone {
+  if (input.stale) return "faint"
+  const levels: Level[] = []
+  if (input.five !== null) levels.push(usageLevel(input.five))
+  if (input.week !== null) levels.push(usageLevel(input.week))
+  if (input.fable != null) levels.push(fableLevel(input.fable))
+  if (levels.length === 0) return "faint"
+  return levels.reduce((worst, level) => (SEVERITY[level] > SEVERITY[worst] ? level : worst))
+}
+
+/**
+ * The footer item for `budget` columns. It tries, in order: full bars with the old marker, full bars,
+ * then bars of 5, 4 and 3 cells, always with every window that is reported (Fable included); when even
+ * the shortest bars do not fit, a single "◉" coloured by the worst level (see iconTone), and with
+ * a budget under 1, nothing (null). The icon is clickable like the bars, so the numbers are one click
+ * away. It never returns something wider than the budget, and a smaller budget never gives a wider one.
  */
 export function footerLayout(input: FooterInput, budget: number): FooterLayout | null {
   const room = Number.isNaN(budget) ? Infinity : budget
-  const attempts: [number, number, boolean, boolean][] = [
-    [FOOTER_MAX_CELLS, 3, true, true],
-    [FOOTER_MAX_CELLS, 3, false, true],
-    [5, 2, false, true],
-    [4, 2, false, true],
-    [3, 2, false, true],
-    [0, 1, false, true],
-    [0, 1, false, false],
+  const attempts: [number, number, boolean][] = [
+    [FOOTER_MAX_CELLS, 3, true],
+    [FOOTER_MAX_CELLS, 3, false],
+    [5, 2, false],
+    [4, 2, false],
+    [3, 2, false],
   ]
-  for (const [cells, gap, marker, withFable] of attempts) {
-    const layout = build(input, cells, gap, marker, withFable)
+  for (const [cells, gap, marker] of attempts) {
+    const layout = build(input, cells, gap, marker)
     if (layout.width <= room) return layout
   }
-  const present = (["five", "week"] as const)
-    .filter((window) => input[window] !== null)
-    .sort((a, b) => (input[b] as number) - (input[a] as number) || (a === "week" ? -1 : 1))
-  const first = present[0]
-  if (!first) return null
-  const part: FooterPart = {
-    window: first,
-    label: first === "five" ? "5h" : "sett",
-    percent: input[first],
-    cells: 0,
+  const icon: FooterLayout = { parts: [], gap: 0, marker: false, width: FOOTER_ICON.length, icon: iconTone(input) }
+  return icon.width <= room ? icon : null
+}
+
+export type MousePoint = { button?: number; x?: number; y?: number }
+
+/**
+ * Turns a mouse press and release on the footer into one click. The press arms it and the release fires
+ * it, only for the main (left) button and only on the same cell: a release that did not start on the
+ * footer (a drag from elsewhere), a drag across the footer text (a text selection), or another button
+ * does nothing. A missing position counts as the same cell.
+ */
+export function createClickGate(onClick: () => void) {
+  let armed: MousePoint | null = null
+  const left = (point: MousePoint) => (point.button ?? 0) === 0
+  return {
+    down(point: MousePoint = {}) {
+      armed = left(point) ? point : null
+    },
+    up(point: MousePoint = {}) {
+      const start = armed
+      armed = null
+      if (!start || !left(point)) return
+      if (start.x !== point.x || start.y !== point.y) return
+      onClick()
+    },
+    cancel() {
+      armed = null
+    },
   }
-  const single: FooterLayout = { parts: [part], gap: 0, marker: false, width: partText(part).length }
-  return single.width <= room ? single : null
 }
 
 /** Bar length and label width for a dialog whose usable width is `width`. */

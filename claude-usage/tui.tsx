@@ -7,6 +7,7 @@ import {
   FABLE_TOAST,
   POLL_INTERVAL_MS,
   WEEKLY_THRESHOLD_PERCENT,
+  createClickGate,
   createFableWatch,
   createWidthTracker,
   dialogLayout,
@@ -15,6 +16,7 @@ import {
   fitText,
   isFreshSnapshot,
   footerLayout,
+  FOOTER_ICON,
   footerMessage,
   formatPercent,
   meter,
@@ -24,8 +26,10 @@ import {
   usageLevel,
   weeklyOverThreshold,
   type FooterPart,
+  type IconTone,
   type Level,
   type MonitorState,
+  type MousePoint,
   type UsageWindow,
 } from "./claude-usage-core.ts"
 import { createLiveMonitor, isDisabled } from "./claude-usage.ts"
@@ -106,12 +110,12 @@ export default Plugin.define({
       return kind === "login-expired" || kind === "no-login" ? state().failure : null
     }
 
-    // One window of the footer: "5h ▰▱▱▱▱▱ 23%", or "5h 23%" when there is no room for the bar.
+    // One window of the footer: "5h ▰▱▱▱▱▱ 23%"; the bar is shorter when room is short.
     const FooterPiece = (props: { part: FooterPart }) => {
       const percent = () => props.part.percent
       const bar = () => {
         const value = percent()
-        return value === null || props.part.cells === 0 ? undefined : meter(value, props.part.cells)
+        return value === null ? undefined : meter(value, props.part.cells)
       }
       const fg = () => {
         const value = percent()
@@ -192,11 +196,22 @@ export default Plugin.define({
         ),
       )
       const message = (kind: "login" | "waiting") => footerMessage(kind, budget())
+      const iconColour = (tone: IconTone) => (tone === "faint" ? theme.text.faint : colour(tone))
+      // A click (press and release on the footer, main button) opens the same dialog as /claude-usage.
+      // The box is not focusable, so the prompt keeps the keyboard focus, and the press is not consumed,
+      // so text selection elsewhere works as before.
+      const clicks = createClickGate(() => void openUsage())
+      const pointOf = (event: unknown): MousePoint => {
+        const { button, x, y } = (event ?? {}) as MousePoint
+        return { button, x, y }
+      }
 
       return (
         <box
           flexDirection="row"
           flexShrink={0}
+          onMouseDown={(event: unknown) => clicks.down(pointOf(event))}
+          onMouseUp={(event: unknown) => clicks.up(pointOf(event))}
           ref={(el: Node) => {
             box = el
             el.onSizeChange = () => queueMicrotask(measure)
@@ -207,6 +222,9 @@ export default Plugin.define({
             fallback={
               <Show when={layout()}>
                 {(drawn) => (
+                  <Show
+                    when={drawn().icon}
+                    fallback={
                   <box flexDirection="row" flexShrink={0}>
                     <For each={drawn().parts}>
                       {(part, index) => (
@@ -222,6 +240,10 @@ export default Plugin.define({
                       <text fg={theme.text.faint} wrapMode="none">{"  (vecchio)"}</text>
                     </Show>
                   </box>
+                    }
+                  >
+                    {(tone) => <text fg={iconColour(tone())} wrapMode="none">{FOOTER_ICON}</text>}
+                  </Show>
                 )}
               </Show>
             }
@@ -346,6 +368,19 @@ export default Plugin.define({
       )
     }
 
+    // Opens the dialog and refreshes the numbers: the /claude-usage command and a click on the footer both call this.
+    const openUsage = async () => {
+      setNow(Date.now())
+      context.ui.dialog.set({ size: "medium", centered: true })
+      context.ui.dialog.show(() => (
+        <ErrorBoundary fallback={(error) => { reportRenderError("dialog", error); return <text fg={theme.text.faint}>{"Uso non disponibile."}</text> }}>
+          <Dialog />
+        </ErrorBoundary>
+      ))
+      await monitor.refresh(true)
+      setNow(Date.now())
+    }
+
     context.keymap.layer(() => ({
       mode: "global",
       commands: [
@@ -355,17 +390,7 @@ export default Plugin.define({
           group: "Claude",
           palette: true,
           slash: { name: "claude-usage", aliases: ["usage"] },
-          run: async () => {
-            setNow(Date.now())
-            context.ui.dialog.set({ size: "medium", centered: true })
-            context.ui.dialog.show(() => (
-              <ErrorBoundary fallback={(error) => { reportRenderError("dialog", error); return <text fg={theme.text.faint}>{"Uso non disponibile."}</text> }}>
-                <Dialog />
-              </ErrorBoundary>
-            ))
-            await monitor.refresh(true)
-            setNow(Date.now())
-          },
+          run: openUsage,
         },
       ],
     }))
