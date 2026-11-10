@@ -4,9 +4,10 @@ A read-only OpenCode 2 plugin that shows how much of your Claude subscription yo
 
 ## What you see
 
-- Under the prompt, always: two small coloured meters, `5h ▰▰▱▱▱▱ 23%   sett ▰▰▰▰▰▰ 96%`. Green under 70%, yellow from 70%, red above 90%. `libero` means no 5-hour window is open. The item measures the room it has in the footer row (not the terminal width) and re-measures when the window or the sidebar changes. When the room shrinks it shortens the bars, then shows only text (`5h 23% sett 96%`), then only the window that matters most, then nothing. It never wraps onto a second line.
+- Under the prompt, always: two small coloured meters (three with Fable, below), `5h ▰▰▱▱▱▱ 23%   sett ▰▰▰▰▰▰ 96%`. Green under 70%, yellow from 70%, red above 90%. `libero` means no 5-hour window is open. The item measures the room it has in the footer row (not the terminal width) and re-measures when the window or the sidebar changes. When the room shrinks it shortens the bars, then shows only text (`5h 23% sett 96%`), then only the window that matters most, then nothing. It never wraps onto a second line.
 - Above 90% weekly, one warning toast the first time it crosses.
-- `/claude-usage` (alias `/usage`, also in the Ctrl+P palette) refreshes and opens a dialog with both windows, when each one resets, and the last error if there was one.
+- On Max and Ultra plans a third meter follows `sett`: `fable ▰▱▱▱▱▱ 12%`, the separate weekly Fable limit. Green under 50%, yellow from 50%, red from 80%. At 80% the agents must stop using Fable, so one warning toast says so the first time it crosses (`Fable all'80% settimanale: niente più Fable per gli agenti`), and again only after Fable has dropped back under 80%. When the plan reports no Fable limit the meter is not drawn and nothing is shown as an error. When room is short Fable is dropped first (after the `(vecchio)` marker), before any bar gets shorter.
+- `/claude-usage` (alias `/usage`, also in the Ctrl+P palette) refreshes and opens a dialog with the windows (5 hours, week and, when reported, Fable), when each one resets, and the last error if there was one.
 - `(vecchio)` after the meters means the last refresh failed and the numbers are old. `accesso scaduto, apri claude` means the Claude Code login has expired.
 
 ## Install
@@ -32,6 +33,8 @@ The source is undocumented. Claude Code's documented one (the statusline `rate_l
 - `GET https://api.anthropic.com/api/oauth/usage` with header `anthropic-beta: oauth-2025-04-20`
 - Authorization: the OAuth access token of your Claude Code login, from the keychain item `Claude Code-credentials` (`claudeAiOauth.accessToken`).
 
+The 5-hour and weekly windows are the top-level `five_hour` and `seven_day` objects (`utilization`, `resets_at`). The Fable window is an entry of the `limits` array with `kind: "weekly_scoped"` and `scope.model.display_name: "Fable"`; its `percent` and `resets_at` are used. `percent` is the share of the Fable limit itself (the 50% of the week set aside for Fable), not of the whole week. The response also has `weekly_scoped_shares[].used_percent_of_weekly` and `allowance_percent_of_weekly`, which the plugin does not read. The `limits` field is as undocumented as the endpoint: if it is missing, malformed or has no Fable entry, the Fable meter is simply absent.
+
 Anthropic can change or remove this endpoint at any time. The footer then says the data is unavailable and nothing else breaks.
 
 ## Safety rules (in code and tests)
@@ -40,7 +43,7 @@ Anthropic can change or remove this endpoint at any time. The footer then says t
 - An expired token is never refreshed. The footer asks you to open `claude`, and the plugin checks again in 5 minutes.
 - One host, `api.anthropic.com`. 10 second timeout, redirects refused, error bodies never read or shown.
 - At most one poll every 5 minutes per OpenCode window, plus `/claude-usage` (not twice within 30 s, not during a 429 back-off). Failures back off 10, 20, 40, then 60 minutes; a 429 honours `Retry-After`.
-- Only the numbers are cached, in `~/.local/state/opencode/claude-usage.json` (mode 0600). Delete it any time.
+- Only the numbers are cached, in `~/.local/state/opencode/claude-usage.json` (mode 0600). Delete it any time. Cache files written before the Fable meter existed still load (Fable is just absent until the next poll).
 - No model call and no prompt.
 
 macOS may ask once whether `security` can read the `Claude Code-credentials` item.
