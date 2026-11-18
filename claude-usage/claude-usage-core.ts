@@ -443,7 +443,8 @@ export function createUsageMonitor(deps: MonitorDeps) {
 
 export type Level = "ok" | "warn" | "high"
 
-// Green under 70%, yellow from 70%, red above the reserve line.
+// By the percent alone: green under 70%, yellow from 70%, red above the reserve line. The 5-hour window
+// uses it, and the week when its reset time is unknown (see weekLevel).
 export function usageLevel(percent: number): Level {
   if (percent > WEEKLY_THRESHOLD_PERCENT) return "high"
   if (percent >= 70) return "warn"
@@ -457,6 +458,59 @@ export function fableLevel(percent: number): Level {
   return "ok"
 }
 
+const DAY_MS = 24 * 60 * 60_000
+/** The week turns yellow when it is more than this many points ahead of an even pace, red past the next line. */
+export const PACE_WARN_MARGIN = 10
+export const PACE_HIGH_MARGIN = 25
+/** In the last hours of the week what is left expires, so only the reserve line can still turn it red. */
+export const LAST_HOURS_MS = 12 * 60 * 60_000
+
+/** `pace`: the percent an even week would have used by now. `margin`: percent used minus pace. */
+export type WeekPace = { level: Level; pace: number; margin: number; reason: "pace" | "reserve" | "last-hours" }
+
+/**
+ * The week judged against the time gone, as the owner's budget rule does: days gone = 7 minus the days
+ * until the reset, between 0.5 and 7; pace = days gone / 7 x 100; margin = used - pace. Green up to
+ * PACE_WARN_MARGIN, yellow up to PACE_HIGH_MARGIN, red above it or inside the reserve; in the last
+ * LAST_HOURS_MS green unless inside the reserve. Null when the reset time is unknown or already past.
+ * Banked resets and work in flight are not known here, so this can be stricter than a coordinator's own count.
+ */
+export function weekPace(window: UsageWindow, now: number): WeekPace | null {
+  if (window.resetsAt === null || window.resetsAt <= now) return null
+  const left = window.resetsAt - now
+  const daysGone = Math.min(7, Math.max(0.5, 7 - left / DAY_MS))
+  const pace = (daysGone / 7) * 100
+  const margin = window.percent - pace
+  if (window.percent >= WEEKLY_THRESHOLD_PERCENT) return { level: "high", pace, margin, reason: "reserve" }
+  if (left <= LAST_HOURS_MS) return { level: "ok", pace, margin, reason: "last-hours" }
+  const level: Level = margin > PACE_HIGH_MARGIN ? "high" : margin > PACE_WARN_MARGIN ? "warn" : "ok"
+  return { level, pace, margin, reason: "pace" }
+}
+
+/** The colour of the week: by its pace when the reset time is known, else by the percent alone. */
+export function weekLevel(window: UsageWindow, now: number): Level {
+  return weekPace(window, now)?.level ?? usageLevel(window.percent)
+}
+
+const LEVEL_WORD: Record<Level, string> = { ok: "verde", warn: "giallo", high: "rosso" }
+
+const RESERVE_IT = `● ${LEVEL_WORD.high} · nella riserva del ${100 - WEEKLY_THRESHOLD_PERCENT}%`
+
+/**
+ * The week's colour in words, so the colour never stands alone: "● rosso · ritmo 25% · 34 sopra".
+ * Without a reset time there is no pace to tell: only the reserve is said, else nothing (undefined).
+ */
+export function paceIt(window: UsageWindow, now: number): string | undefined {
+  const pace = weekPace(window, now)
+  if (!pace) return usageLevel(window.percent) === "high" ? RESERVE_IT : undefined
+  if (pace.reason === "reserve") return RESERVE_IT
+  const lead = `● ${LEVEL_WORD[pace.level]}`
+  if (pace.reason === "last-hours") return `${lead} · ultime ore, il resto scade`
+  const points = Math.round(Math.abs(pace.margin))
+  const side = points === 0 ? "in pari" : `${points} ${pace.margin > 0 ? "sopra" : "sotto"}`
+  return `${lead} · ritmo ${formatPercent(pace.pace)} · ${side}`
+}
+
 // A bar of `cells` cells: how many are filled and how many are empty.
 export function meter(percent: number, cells: number): { filled: string; empty: string } {
   const clamped = Math.min(100, Math.max(0, percent))
@@ -464,45 +518,66 @@ export function meter(percent: number, cells: number): { filled: string; empty: 
   return { filled: "▰".repeat(full), empty: "▱".repeat(cells - full) }
 }
 
-const GIORNI = ["dom", "lun", "mar", "mer", "gio", "ven", "sab"]
-
-function durataIt(ms: number): string {
-  const minutes = Math.max(0, Math.round(ms / 60_000))
-  if (minutes < 60) return `${minutes} min`
+/**
+ * A span of time the way every panel shows it: "<1m", "12m", "1h 5m", "2g 3h". At most two units, the
+ * smaller one left out when it is 0. A negative or unusable span reads as "<1m".
+ * Keep identical in every core that has it: copies.test.ts at the root lists and compares them.
+ */
+export function relativeIt(ms: number): string {
+  const minutes = Number.isFinite(ms) && ms > 0 ? Math.floor(ms / 60_000) : 0
+  if (minutes < 1) return "<1m"
+  if (minutes < 60) return `${minutes}m`
   const hours = Math.floor(minutes / 60)
-  if (hours < 24) return minutes % 60 ? `${hours} h ${minutes % 60} min` : `${hours} h`
+  if (hours < 24) return minutes % 60 === 0 ? `${hours}h` : `${hours}h ${minutes % 60}m`
   const days = Math.floor(hours / 24)
-  return hours % 24 ? `${days} g ${hours % 24} h` : `${days} g`
+  return hours % 24 === 0 ? `${days}g` : `${days}g ${hours % 24}h`
 }
 
-// "si azzera tra 1 h 9 min, mar 01:00"
+const GIORNI = ["domenica", "lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato"]
+
+/** "si azzera tra 5g 2h (sabato)": the day is named only when the reset is a day or more away. Never a clock time. */
 export function resetIt(window: UsageWindow, now: number): string {
   if (window.resetsAt === null) return "azzeramento non indicato"
   if (window.resetsAt <= now) return "si sta azzerando"
-  const d = new Date(window.resetsAt)
-  const clock = `${GIORNI[d.getDay()]} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`
-  return `si azzera tra ${durataIt(window.resetsAt - now)}, ${clock}`
+  const left = window.resetsAt - now
+  if (left < 60_000) return "si azzera tra poco"
+  const day = left >= DAY_MS ? ` (${GIORNI[new Date(window.resetsAt).getDay()]})` : ""
+  return `si azzera tra ${relativeIt(left)}${day}`
 }
 
 export function updatedIt(fetchedAt: number, now: number): string {
   const ms = now - fetchedAt
-  return ms < 60_000 ? "aggiornato adesso" : `aggiornato ${durataIt(ms)} fa`
+  return ms < 60_000 ? "aggiornato adesso" : `aggiornato ${relativeIt(ms)} fa`
 }
 
-// Italian one-liner for a failure, shown in the footer and the dialog.
-export function failureIt(failure: Failure): string {
+/**
+ * Italian one-liner for a failure, shown in the dialog. `retryInMs` is the time until the next attempt:
+ * from a minute up it is said ("riprovo tra 12m"). A login problem names what you do, not a retry.
+ */
+export function failureIt(failure: Failure, retryInMs?: number): string {
+  const retry = retryInMs !== undefined && retryInMs >= 60_000 ? `, riprovo tra ${relativeIt(retryInMs)}` : undefined
   switch (failure.kind) {
     case "no-login":
     case "login-expired":
       return "accesso scaduto, apri claude"
     case "rate-limited":
-      return "troppe richieste, riprovo tra poco"
+      return `troppe richieste${retry ?? ", riprovo tra poco"}`
     case "timeout":
     case "network":
-      return "rete non raggiungibile"
+      return `rete non raggiungibile${retry ?? ""}`
     default:
-      return "dati non disponibili"
+      return `dati non disponibili${retry ?? ""}`
   }
+}
+
+/** True when only you can fix the failure (open claude and sign in): it is drawn in the "waits for you" colour. */
+export function needsYou(failure: Failure | null): boolean {
+  return failure?.kind === "no-login" || failure?.kind === "login-expired"
+}
+
+/** The dialog line for numbers that could not be refreshed: "Non aggiornato: troppe richieste, riprovo tra 12m". */
+export function staleIt(failure: Failure, retryInMs?: number): string {
+  return `Non aggiornato: ${failureIt(failure, retryInMs)}`
 }
 
 // --- size (used by the TUI) ----------------------------------------------------------------
@@ -520,6 +595,8 @@ export type FooterPart = {
   label: "5h" | "sett" | "fable"
   percent: number | null
   cells: number
+  /** The colour of the bar and the number; undefined when there is no number ("libero"). */
+  level?: Level
 }
 // `icon` is set only for the one-character fallback: its colour (a level, or "faint" when the numbers
 // are old or there is nothing to judge).
@@ -542,14 +619,25 @@ export function footerText(layout: FooterLayout): string {
 
 // `fable` is optional: absent or null means the plan reports no Fable limit, and the meter is not drawn.
 // `five` null means the plan reports no 5-hour window: it is not drawn either. `week` null still says "libero".
-type FooterInput = { five: number | null; week: number | null; stale: boolean; fable?: number | null }
+// `weekLevel` is the colour of the week by its pace (see weekLevel); without it the percent alone decides.
+type FooterInput = { five: number | null; week: number | null; stale: boolean; fable?: number | null; weekLevel?: Level }
+
+/** The level of each window that has a number, each by its own rule. */
+function footerLevels(input: FooterInput): { five?: Level; week?: Level; fable?: Level } {
+  return {
+    five: input.five === null ? undefined : usageLevel(input.five),
+    week: input.week === null ? undefined : (input.weekLevel ?? usageLevel(input.week)),
+    fable: input.fable == null ? undefined : fableLevel(input.fable),
+  }
+}
 
 function build(input: FooterInput, cells: number, gap: number, marker: boolean): FooterLayout {
   const parts: FooterPart[] = []
+  const levels = footerLevels(input)
   // No 5-hour window reported (Ultra never has one): the meter is not drawn, not shown as "libero".
-  if (input.five !== null) parts.push({ window: "five", label: "5h", percent: input.five, cells })
-  parts.push({ window: "week", label: "sett", percent: input.week, cells })
-  if (input.fable != null) parts.push({ window: "fable", label: "fable", percent: input.fable, cells })
+  if (input.five !== null) parts.push({ window: "five", label: "5h", percent: input.five, cells, level: levels.five })
+  parts.push({ window: "week", label: "sett", percent: input.week, cells, level: levels.week })
+  if (input.fable != null) parts.push({ window: "fable", label: "fable", percent: input.fable, cells, level: levels.fable })
   const layout: FooterLayout = { parts, gap, marker: marker && input.stale, width: 0 }
   layout.width = footerText(layout).length
   return layout
@@ -559,15 +647,13 @@ const SEVERITY: Record<Level, number> = { ok: 0, warn: 1, high: 2 }
 
 /**
  * The colour of the one-character icon: the worst level among the windows that are shown (red beats
- * yellow beats green, each window by its own thresholds, Fable included). No numbers at all give "faint".
+ * yellow beats green, each window by its own rule: the week by its pace, Fable by its own lines). No
+ * numbers at all give "faint".
  * Old numbers (stale) are faint too, unless one of them is red: a red warning stays red even when the
  * last refresh failed, like the stale bars that keep their colours next to "(vecchio)".
  */
 export function iconTone(input: FooterInput): IconTone {
-  const levels: Level[] = []
-  if (input.five !== null) levels.push(usageLevel(input.five))
-  if (input.week !== null) levels.push(usageLevel(input.week))
-  if (input.fable != null) levels.push(fableLevel(input.fable))
+  const levels = Object.values(footerLevels(input)).filter((level): level is Level => level !== undefined)
   if (levels.length === 0) return "faint"
   const worst = levels.reduce((top, level) => (SEVERITY[level] > SEVERITY[top] ? level : top))
   return input.stale && worst !== "high" ? "faint" : worst
@@ -780,11 +866,11 @@ export function footerMessage(kind: keyof typeof MESSAGES, budget: number): stri
   return MESSAGES[kind].find((text) => text.length <= room) ?? null
 }
 
-/** The reset line for `width` columns: whole, then without the clock, then without "si azzera", then cut. */
+/** The reset line for `width` columns: whole, then without the day, then without "si azzera", then cut. */
 export function resetFit(window: UsageWindow, now: number, width: number): string {
   const full = resetIt(window, now)
   if (full.length <= width) return full
-  const noClock = full.replace(/, [a-z]{3} \d\d:\d\d$/, "")
-  if (noClock.length <= width) return noClock
-  return fitText(noClock.replace(/^si azzera /, ""), width)
+  const noDay = full.replace(/ \([^)]*\)$/, "")
+  if (noDay.length <= width) return noDay
+  return fitText(noDay.replace(/^si azzera /, ""), width)
 }

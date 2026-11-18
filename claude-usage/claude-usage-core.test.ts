@@ -24,6 +24,14 @@ import {
   FOOTER_MAX_CELLS,
   resetIt,
   updatedIt,
+  failureIt,
+  needsYou,
+  staleIt,
+  paceIt,
+  weekLevel,
+  weekPace,
+  PACE_HIGH_MARGIN,
+  PACE_WARN_MARGIN,
   type MonitorDeps,
   MAX_BACKOFF_MS,
   POLL_INTERVAL_MS,
@@ -545,12 +553,158 @@ describe("look", () => {
     expect(meter(23, 10)).toEqual({ filled: "▰▰", empty: "▱".repeat(8) })
     expect(meter(150, 5).filled).toBe("▰▰▰▰▰")
   })
-  test("reset and update in Italian", () => {
+  test("the reset is a time span in the shared format, never a clock time", () => {
     const now = new Date(2026, 10, 9, 23, 51).getTime()
-    expect(resetIt({ percent: 96, resetsAt: new Date(2026, 10, 10, 1, 0).getTime() }, now)).toBe("si azzera tra 1 h 9 min, mar 01:00")
+    const soon = resetIt({ percent: 96, resetsAt: new Date(2026, 10, 10, 1, 0).getTime() }, now)
+    expect(soon).toBe("si azzera tra 1h 9m")
+    expect(soon).not.toMatch(/\d:\d/)
+  })
+  test("a reset a day or more away also names its day, in full", () => {
+    const now = new Date(2026, 10, 9, 21, 59).getTime() // a Monday
+    expect(resetIt({ percent: 59, resetsAt: new Date(2026, 10, 14, 23, 59).getTime() }, now)).toBe("si azzera tra 5g 2h (sabato)")
+    expect(resetIt({ percent: 59, resetsAt: new Date(2026, 10, 10, 21, 59).getTime() }, now)).toBe("si azzera tra 1g (martedì)")
+    expect(resetIt({ percent: 59, resetsAt: new Date(2026, 10, 10, 21, 58).getTime() }, now)).toBe("si azzera tra 23h 59m")
+  })
+  test("a reset with no time, one under a minute away and one already due", () => {
+    const now = new Date(2026, 10, 9, 23, 51).getTime()
     expect(resetIt({ percent: 1, resetsAt: null }, now)).toBe("azzeramento non indicato")
+    expect(resetIt({ percent: 1, resetsAt: now + 59_000 }, now)).toBe("si azzera tra poco")
+    expect(resetIt({ percent: 1, resetsAt: now }, now)).toBe("si sta azzerando")
+  })
+  test("the age of the numbers uses the same format", () => {
+    const now = new Date(2026, 10, 9, 23, 51).getTime()
     expect(updatedIt(now - 30_000, now)).toBe("aggiornato adesso")
-    expect(updatedIt(now - 180_000, now)).toBe("aggiornato 3 min fa")
+    expect(updatedIt(now - 180_000, now)).toBe("aggiornato 3m fa")
+    expect(updatedIt(now - 65 * 60_000, now)).toBe("aggiornato 1h 5m fa")
+  })
+})
+
+describe("failureIt, why the numbers are old and when the next attempt is", () => {
+  const MIN = 60_000
+  test("says when it tries again, from a minute up", () => {
+    expect(failureIt({ kind: "rate-limited", status: 429 }, 12 * MIN)).toBe("troppe richieste, riprovo tra 12m")
+    expect(failureIt({ kind: "network" }, 5 * MIN)).toBe("rete non raggiungibile, riprovo tra 5m")
+    expect(failureIt({ kind: "timeout" }, 65 * MIN)).toBe("rete non raggiungibile, riprovo tra 1h 5m")
+    expect(failureIt({ kind: "bad-response" }, 5 * MIN)).toBe("dati non disponibili, riprovo tra 5m")
+  })
+  test("under a minute, or with no known time, it gives no number", () => {
+    expect(failureIt({ kind: "rate-limited" }, 59_000)).toBe("troppe richieste, riprovo tra poco")
+    expect(failureIt({ kind: "rate-limited" })).toBe("troppe richieste, riprovo tra poco")
+    expect(failureIt({ kind: "network" }, -5_000)).toBe("rete non raggiungibile")
+    expect(failureIt({ kind: "network" })).toBe("rete non raggiungibile")
+  })
+  test("a login problem names what you do, never a retry", () => {
+    expect(failureIt({ kind: "login-expired" }, 5 * MIN)).toBe("accesso scaduto, apri claude")
+    expect(failureIt({ kind: "no-login" }, 5 * MIN)).toBe("accesso scaduto, apri claude")
+  })
+  test("only a login problem waits for you; every other failure retries by itself", () => {
+    expect(needsYou({ kind: "login-expired" })).toBe(true)
+    expect(needsYou({ kind: "no-login" })).toBe(true)
+    for (const kind of ["rate-limited", "network", "timeout", "bad-response"] as const) expect(needsYou({ kind })).toBe(false)
+    expect(needsYou(null)).toBe(false)
+  })
+  test("the dialog line is short enough for its default width", () => {
+    const line = staleIt({ kind: "rate-limited", status: 429 }, 59 * MIN)
+    expect(line).toBe("Non aggiornato: troppe richieste, riprovo tra 59m")
+    expect(line.length).toBeLessThanOrEqual(52)
+  })
+})
+
+describe("the week is coloured by its pace", () => {
+  const DAY = 24 * 60 * 60_000
+  const NOW = new Date(2026, 10, 18, 12, 0).getTime()
+  /** A weekly window `daysIn` days old with `percent` used. */
+  const week = (percent: number, daysIn: number) => ({ percent, resetsAt: NOW + (7 - daysIn) * DAY })
+
+  test("59% used 1.8 days into the week is red: the percent alone would have said green", () => {
+    const pace = weekPace(week(59, 1.8), NOW)
+    expect(usageLevel(59)).toBe("ok")
+    expect(pace?.level).toBe("high")
+    expect(pace?.reason).toBe("pace")
+    expect(Math.round(pace?.pace ?? 0)).toBe(26)
+    expect(Math.round(pace?.margin ?? 0)).toBe(33)
+    expect(weekLevel(week(59, 1.8), NOW)).toBe("high")
+  })
+
+  test("the same 59% five days in is green: it is behind the pace", () => {
+    expect(weekLevel(week(59, 5), NOW)).toBe("ok")
+    expect(Math.round(weekPace(week(59, 5), NOW)?.margin ?? 0)).toBe(-12)
+  })
+
+  test("green up to 10 points ahead, yellow up to 25, red above", () => {
+    expect([PACE_WARN_MARGIN, PACE_HIGH_MARGIN]).toEqual([10, 25])
+    // 3.5 days in the pace is exactly 50%.
+    expect(weekLevel(week(60, 3.5), NOW)).toBe("ok")
+    expect(weekLevel(week(60.5, 3.5), NOW)).toBe("warn")
+    expect(weekLevel(week(75, 3.5), NOW)).toBe("warn")
+    expect(weekLevel(week(75.5, 3.5), NOW)).toBe("high")
+  })
+
+  test("the first hours of a week count as half a day, so a little use is not judged against a pace near 0", () => {
+    const hourIn = week(17, 1 / 24)
+    expect(weekPace(hourIn, NOW)?.pace).toBeCloseTo(100 / 14, 5)
+    expect(weekLevel(hourIn, NOW)).toBe("ok")
+    expect(weekLevel(week(18, 1 / 24), NOW)).toBe("warn")
+  })
+
+  test("a reset more than a week away still counts as half a day gone", () => {
+    expect(weekPace({ percent: 5, resetsAt: NOW + 9 * DAY }, NOW)?.pace).toBeCloseTo(100 / 14, 5)
+  })
+
+  test("inside the reserve it is red whatever the pace", () => {
+    expect(weekLevel(week(89.9, 6.9), NOW)).toBe("ok")
+    expect(weekPace(week(90, 6.9), NOW)).toMatchObject({ level: "high", reason: "reserve" })
+    expect(weekPace(week(97, 3), NOW)).toMatchObject({ level: "high", reason: "reserve" })
+  })
+
+  test("the last 12 hours are green outside the reserve, and say why", () => {
+    const lastHours = { percent: 80, resetsAt: NOW + 12 * 60 * 60_000 }
+    expect(weekPace(lastHours, NOW)).toMatchObject({ level: "ok", reason: "last-hours" })
+    expect(weekPace({ percent: 80, resetsAt: NOW + 12 * 60 * 60_000 + 60_000 }, NOW)?.reason).toBe("pace")
+    expect(weekPace({ percent: 95, resetsAt: NOW + 60_000 }, NOW)).toMatchObject({ level: "high", reason: "reserve" })
+  })
+
+  test("without a reset time, or with one already past, the percent alone decides", () => {
+    expect(weekPace({ percent: 59, resetsAt: null }, NOW)).toBeNull()
+    expect(weekPace({ percent: 59, resetsAt: NOW - 1 }, NOW)).toBeNull()
+    expect(weekLevel({ percent: 59, resetsAt: null }, NOW)).toBe("ok")
+    expect(weekLevel({ percent: 70, resetsAt: null }, NOW)).toBe("warn")
+    expect(weekLevel({ percent: 91, resetsAt: NOW - 1 }, NOW)).toBe("high")
+  })
+
+  test("paceIt says the colour in words, with the pace and how far from it", () => {
+    expect(paceIt(week(59, 1.8), NOW)).toBe("● rosso · ritmo 26% · 33 sopra")
+    expect(paceIt(week(65, 3.5), NOW)).toBe("● giallo · ritmo 50% · 15 sopra")
+    expect(paceIt(week(30, 3.5), NOW)).toBe("● verde · ritmo 50% · 20 sotto")
+    expect(paceIt(week(50.4, 3.5), NOW)).toBe("● verde · ritmo 50% · in pari")
+  })
+
+  test("paceIt names the reserve and the last hours in place of the pace", () => {
+    expect(paceIt(week(93, 6), NOW)).toBe("● rosso · nella riserva del 10%")
+    expect(paceIt({ percent: 80, resetsAt: NOW + 60 * 60_000 }, NOW)).toBe("● verde · ultime ore, il resto scade")
+  })
+
+  test("paceIt without a reset time says only the reserve, else nothing", () => {
+    expect(paceIt({ percent: 59, resetsAt: null }, NOW)).toBeUndefined()
+    expect(paceIt({ percent: 91, resetsAt: null }, NOW)).toBe("● rosso · nella riserva del 10%")
+  })
+
+  test("the footer draws the week in its pace colour and the other windows by their own lines", () => {
+    const layout = footerLayout({ five: 23, week: 59, fable: 36, stale: false, weekLevel: "high" }, 200)
+    expect(layout?.parts.map((part) => [part.window, part.level])).toEqual([["five", "ok"], ["week", "high"], ["fable", "ok"]])
+    const byPercent = footerLayout({ five: 95, week: 75, fable: 50, stale: false }, 200)
+    expect(byPercent?.parts.map((part) => part.level)).toEqual(["high", "warn", "warn"])
+  })
+
+  test("a window with no number has no colour", () => {
+    expect(footerLayout({ five: null, week: null, stale: false }, 200)?.parts.map((part) => part.level)).toEqual([undefined])
+  })
+
+  test("the one-character icon takes the pace colour of the week too", () => {
+    expect(iconTone({ five: null, week: 59, fable: 36, stale: false })).toBe("ok")
+    expect(iconTone({ five: null, week: 59, fable: 36, stale: false, weekLevel: "high" })).toBe("high")
+    expect(iconTone({ five: null, week: 75, fable: 10, stale: false, weekLevel: "ok" })).toBe("ok")
+    expect(footerLayout({ five: null, week: 59, fable: 36, stale: false, weekLevel: "high" }, 1)?.icon).toBe("high")
   })
 })
 
@@ -1015,17 +1169,21 @@ describe("footerMessage", () => {
 describe("resetFit", () => {
   const now = new Date(2026, 10, 9, 23, 51).getTime()
   const window = { percent: 96, resetsAt: new Date(2026, 10, 10, 1, 0).getTime() }
+  const weekly = { percent: 59, resetsAt: new Date(2026, 10, 14, 23, 59).getTime() + 2 * 60 * 60_000 }
   test("the whole line when it fits", () => {
-    expect(resetFit(window, now, 40)).toBe("si azzera tra 1 h 9 min, mar 01:00")
+    expect(resetFit(window, now, 40)).toBe("si azzera tra 1h 9m")
+    expect(resetFit(weekly, now, 30)).toBe("si azzera tra 5g 2h (domenica)")
   })
-  test("loses the clock, then the first words, then gets cut", () => {
-    expect(resetFit(window, now, 33)).toBe("si azzera tra 1 h 9 min")
-    expect(resetFit(window, now, 20)).toBe("tra 1 h 9 min")
-    expect(resetFit(window, now, 8)).toBe("tra 1 h…")
+  test("loses the day, then the first words, then gets cut", () => {
+    expect(resetFit(weekly, now, 29)).toBe("si azzera tra 5g 2h")
+    expect(resetFit(weekly, now, 19)).toBe("si azzera tra 5g 2h")
+    expect(resetFit(weekly, now, 18)).toBe("tra 5g 2h")
+    expect(resetFit(weekly, now, 6)).toBe("tra 5…")
   })
-  test("texts without a clock are cut, never longer than the width", () => {
+  test("texts without a day are cut, never longer than the width", () => {
     expect(resetFit({ percent: 1, resetsAt: null }, now, 10)).toBe("azzeramen…")
-    for (let width = 1; width < 50; width++) expect([...resetFit(window, now, width)].length).toBeLessThanOrEqual(width)
+    for (const each of [window, weekly])
+      for (let width = 1; width < 50; width++) expect([...resetFit(each, now, width)].length).toBeLessThanOrEqual(width)
   })
 })
 
