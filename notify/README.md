@@ -12,7 +12,7 @@ An OpenCode 2 plugin that pings you, only when the terminal is not focused, when
 | A form or question waits for you (any session) | `OpenCode: serve una risposta` | `question` |
 
 - A child session (background subagent) finishing or failing is silent on purpose.
-- At most one ping every 20 seconds. A ping that was not delivered (terminal focused) does not use up the 20 seconds.
+- At most one ping every 20 seconds per OpenCode window (each window keeps its own 20 seconds). A ping that was not delivered (terminal focused) does not use up the 20 seconds.
 - A permission or question that comes inside the 20 seconds pings when they end, unless it was answered first. When several wait, one ping goes out for the latest. A finished or failed run inside the 20 seconds stays silent.
 - Each permission or question pings once, until it is answered.
 - A run you interrupt (Esc) is silent. The error text is never shown in the ping.
