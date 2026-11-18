@@ -54,6 +54,19 @@ describe("noticeFor", () => {
     expect(noticeFor("done", undefined)).toBeUndefined()
   })
 
+  test("a failed run of the main session pings with the error sound", () => {
+    expect(noticeFor("failed", { parentID: undefined })).toEqual({
+      title: "OpenCode",
+      message: "mi sono fermato per un errore",
+      sound: "error",
+    })
+  })
+
+  test("a failed child session, or one we know nothing about, is silent", () => {
+    expect(noticeFor("failed", { parentID: "ses_parent" })).toBeUndefined()
+    expect(noticeFor("failed", undefined)).toBeUndefined()
+  })
+
   test("a permission request always notifies, also from a child session", () => {
     const notice = { title: "OpenCode", message: "serve un permesso", sound: "permission" }
     expect(noticeFor("permission", { parentID: undefined })).toEqual(notice)
