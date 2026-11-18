@@ -510,6 +510,15 @@ describe("monitor: a 429 back-off is shared through the cache file", () => {
     expect([await reloaded.monitor.refresh(true), reloaded.calls.fetch]).toEqual(["skipped", 0])
   })
 
+  test("a network failure is not shared: the file has no back-off end and another window's /usage still goes", async () => {
+    const cache = sharedCache()
+    await harness({ ...cache, fetchUsage: async () => ({ ok: false, failure: { kind: "network" } }) }).monitor.refresh()
+    const saved = await cache.loadCache()
+    const other = harness(cache)
+    other.advance(60_000)
+    expect([saved?.rateLimitedUntil, await other.monitor.refresh(true)]).toEqual([undefined, "refreshed"])
+  })
+
   test("a window that is already open sees another window's 429 before its next poll", async () => {
     const cache = sharedCache()
     const open = harness(cache)

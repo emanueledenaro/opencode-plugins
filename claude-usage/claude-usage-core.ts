@@ -352,7 +352,7 @@ export function createUsageMonitor(deps: MonitorDeps) {
 
   // A missing or expired login (seen locally or refused by the server) is not a network failure: retry at
   // the normal interval, no back-off, so the footer recovers within 5 minutes after Claude Code logs in again.
-  const needLogin = (failure: Failure): RefreshOutcome => {
+  const retryAfterLogin = (failure: Failure): RefreshOutcome => {
     publish({ ...state, failure, nextAllowedAt: deps.now() + POLL_INTERVAL_MS })
     return "failed"
   }
@@ -386,9 +386,9 @@ export function createUsageMonitor(deps: MonitorDeps) {
     lastAttemptAt = deps.now()
     try {
       const credentials = await deps.readCredentials()
-      if (!credentials.ok) return needLogin({ kind: credentials.kind })
+      if (!credentials.ok) return retryAfterLogin({ kind: credentials.kind })
       const result = await deps.fetchUsage(credentials.token)
-      if (!result.ok) return result.failure.kind === "login-expired" ? needLogin(result.failure) : fail(result.failure)
+      if (!result.ok) return result.failure.kind === "login-expired" ? retryAfterLogin(result.failure) : fail(result.failure)
       const snapshot = parseUsage(result.body, deps.now())
       if (!snapshot) return fail({ kind: "bad-response" })
       publish({ snapshot, failure: null, consecutiveFailures: 0, nextAllowedAt: deps.now() + POLL_INTERVAL_MS })

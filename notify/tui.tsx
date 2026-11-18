@@ -64,7 +64,7 @@ export default Plugin.define({
       context.data.on("session.execution.failed", (event) => send("failed", sessionOf(event))),
       context.data.on("permission.asked", (event) => {
         const data = (event as { data?: { id?: string; sessionID?: string } }).data
-        if (!data?.id || !seenPermissions.first(data.id)) return
+        if (!data?.id || !seenPermissions.claim(data.id)) return
         send("permission", data.sessionID, data.id)
       }),
       context.data.on("permission.replied", (event) => {
@@ -75,7 +75,7 @@ export default Plugin.define({
       }),
       context.data.on("form.created", (event) => {
         const form = (event as { data?: { form?: { id?: string; sessionID?: string } } }).data?.form
-        if (!form?.id || !seenForms.first(form.id)) return
+        if (!form?.id || !seenForms.claim(form.id)) return
         send("form", form.sessionID, form.id)
       }),
       context.data.on("form.replied", formAnswered),

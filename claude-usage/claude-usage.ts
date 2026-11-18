@@ -8,7 +8,7 @@
 // "usage unavailable" and nothing else breaks.
 import { execFile } from "node:child_process"
 import { closeSync, constants, fchmodSync, fstatSync, ftruncateSync, mkdirSync, openSync, writeSync } from "node:fs"
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
+import { mkdir, open, rename, unlink, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import {
@@ -25,6 +25,7 @@ export const USAGE_URL = "https://api.anthropic.com/api/oauth/usage" // the only
 export const KEYCHAIN_SERVICE = "Claude Code-credentials"
 export const REQUEST_TIMEOUT_MS = 10_000
 export const CACHE_PATH = join(homedir(), ".local", "state", "opencode", "claude-usage.json")
+const CACHE_READ_LIMIT = 64 * 1024 // a real cache file is a few hundred bytes
 export const RENDER_ERROR_PATH = join(dirname(CACHE_PATH), "claude-usage-render-error.txt")
 
 // Reads the keychain item on every call. The returned token lives in memory only.
@@ -91,20 +92,37 @@ async function fetchUsage(token: string): Promise<FetchResult> {
   }
 }
 
-async function loadCache(): Promise<CacheFile | null> {
+/**
+ * The cached numbers, or null. Runs before every network attempt, so it must never hang: O_NONBLOCK and the
+ * isFile check refuse a pipe in its place, O_NOFOLLOW refuses a symlink, and only a small file is read.
+ */
+export async function loadCache(file = CACHE_PATH): Promise<CacheFile | null> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined
   try {
-    return parseCache(await readFile(CACHE_PATH, "utf8"))
+    handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+    const info = await handle.stat()
+    if (!info.isFile() || info.size > CACHE_READ_LIMIT) return null
+    return parseCache(await handle.readFile("utf8"))
   } catch {
     return null
+  } finally {
+    await handle?.close().catch(() => {})
   }
 }
 
 // Only the usage numbers, the next-attempt time and, during a 429 back-off, its end are written.
-async function saveCache(state: Parameters<typeof serializeCache>[0]): Promise<void> {
-  await mkdir(dirname(CACHE_PATH), { recursive: true })
-  const temp = `${CACHE_PATH}.${process.pid}.tmp`
-  await writeFile(temp, serializeCache(state), { mode: 0o600 })
-  await rename(temp, CACHE_PATH)
+// The temp file is created new ("wx"): a symlink or a pipe already at that path makes the save fail at once
+// instead of being followed or waited on, and is removed so the next save works.
+export async function saveCache(state: Parameters<typeof serializeCache>[0], file = CACHE_PATH): Promise<void> {
+  await mkdir(dirname(file), { recursive: true })
+  const temp = `${file}.${process.pid}.tmp`
+  try {
+    await writeFile(temp, serializeCache(state), { mode: 0o600, flag: "wx" })
+    await rename(temp, file)
+  } catch (error) {
+    await unlink(temp).catch(() => {})
+    throw error
+  }
 }
 
 export function createLiveMonitor() {
@@ -112,8 +130,8 @@ export function createLiveMonitor() {
     now: () => Date.now(),
     readCredentials,
     fetchUsage,
-    loadCache,
-    saveCache,
+    loadCache: () => loadCache(),
+    saveCache: (state) => saveCache(state),
   })
 }
 
