@@ -23,6 +23,7 @@ import {
   titleLine,
   createSyncGate,
   createWidthTracker,
+  SLOW_SYNC_MS,
   NO_COMMENT,
   dialogPreview,
   formatAttachment,
@@ -1144,22 +1145,51 @@ describe("createWidthTracker", () => {
 })
 
 describe("createSyncGate", () => {
-  test("the first look always reads", () => {
-    expect(createSyncGate().due(undefined, false)).toBe(true)
+  // One tick of the 1 s timer: nothing shown, folder stamp 1000, session S1, at 0 ms, unless given.
+  const look = (over: Partial<{ stamp: number | undefined; session: string | undefined; listShown: boolean; now: number }> = {}) => ({
+    stamp: 1_000 as number | undefined,
+    session: "ses_1" as string | undefined,
+    listShown: false,
+    now: 0,
+    ...over,
   })
-  test("with no list shown, reads only when the folder changed", () => {
+
+  test("the first tick always reads", () => {
+    expect(createSyncGate().tick(look({ stamp: undefined, session: undefined }))).toBe(true)
+  })
+  test("with no list shown, the same session and a quiet folder, it reads only when the folder changed", () => {
     const gate = createSyncGate()
-    gate.due(1_000, false)
-    expect([gate.due(1_000, false), gate.due(2_000, false), gate.due(2_000, false)]).toEqual([false, true, false])
+    gate.tick(look())
+    const ticks = [look({ now: 1_000 }), look({ stamp: 2_000, now: 2_000 }), look({ stamp: 2_000, now: 3_000 })]
+    expect(ticks.map((one) => gate.tick(one))).toEqual([false, true, false])
   })
   test("a folder that appears or goes away counts as a change", () => {
     const gate = createSyncGate()
-    gate.due(undefined, false)
-    expect([gate.due(1_000, false), gate.due(undefined, false)]).toEqual([true, true])
+    gate.tick(look({ stamp: undefined }))
+    expect([gate.tick(look({ now: 1_000 })), gate.tick(look({ stamp: undefined, now: 2_000 }))]).toEqual([true, true])
   })
   test("while a list is shown it reads every time: the server may consume the file, the list may expire", () => {
     const gate = createSyncGate()
-    gate.due(1_000, true)
-    expect(gate.due(1_000, true)).toBe(true)
+    gate.tick(look({ listShown: true }))
+    expect(gate.tick(look({ listShown: true, now: 1_000 }))).toBe(true)
+  })
+  test("a quote another window added for S2 while S1 was shown is read when you switch to S2", () => {
+    const gate = createSyncGate()
+    gate.tick(look())
+    const otherWindowWrote = gate.tick(look({ stamp: 2_000, now: 1_000 })) // reads S1, the session shown
+    const switched = gate.tick(look({ stamp: 2_000, session: "ses_2", now: 2_000 }))
+    const stayed = gate.tick(look({ stamp: 2_000, session: "ses_2", now: 3_000 }))
+    expect([otherWindowWrote, switched, stayed]).toEqual([true, true, false])
+  })
+  test("reads at least every 10 seconds, for a change the folder time cannot show", () => {
+    const gate = createSyncGate()
+    gate.tick(look())
+    const at = (now: number) => gate.tick(look({ now }))
+    expect([SLOW_SYNC_MS, at(9_000), at(10_000), at(19_000), at(20_000)]).toEqual([10_000, false, true, false, true])
+  })
+  test("a clock that goes backwards reads at once instead of waiting for the slow read", () => {
+    const gate = createSyncGate()
+    gate.tick(look({ now: 50_000 }))
+    expect(gate.tick(look({ now: 1_000 }))).toBe(true)
   })
 })

@@ -236,12 +236,13 @@ export default Plugin.define({
     }))
 
     // The server consumes the file when the message is sent; this keeps the box in step with the file.
-    // With no list shown it only looks at the folder's time, and reads when that changed.
+    // With no list shown it reads only when the folder or the current session changed, or every 10 s.
     const syncGate = createSyncGate()
     const timer = setInterval(() => {
       const known = Object.keys(quotes())
-      if (!syncGate.due(folderStamp(fs), known.length > 0)) return
       const current = currentSessionID()
+      const look = { stamp: folderStamp(fs), session: current, listShown: known.length > 0, now: Date.now() }
+      if (!syncGate.tick(look)) return
       // Also the current session, so a quote added in another OpenCode window shows here too.
       for (const sessionID of current && !known.includes(current) ? [...known, current] : known) {
         refresh(sessionID)

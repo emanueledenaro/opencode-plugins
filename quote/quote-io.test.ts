@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync, utimesSync } from "node:fs"
+import { mkdtempSync, rmSync, statSync, utimesSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createPendingFs, folderStamp } from "./quote-io"
@@ -28,5 +28,15 @@ describe("folderStamp", () => {
     age(fs.dir)
     fs.remove(join(fs.dir, "a.json"))
     expect([before, afterWrite === before, folderStamp(fs) === before]).toEqual([1_000_000, false, false])
+  })
+})
+
+describe("read", () => {
+  test("a pipe in place of a pending file reads as junk at once instead of hanging the screen", () => {
+    const fs = createPendingFs(join(root, "with-pipe"))
+    fs.write(join(fs.dir, "ses_a.json"), "{}")
+    const pipe = join(fs.dir, "ses_pipe.json")
+    expect(Bun.spawnSync(["mkfifo", pipe]).exitCode).toBe(0)
+    expect([fs.read(pipe), statSync(pipe).isFIFO()]).toEqual(["{}", true])
   })
 })

@@ -15,8 +15,9 @@ export const createPendingFs = (dir: string = pendingDir()): PendingFs => ({
   dir,
   read(path) {
     try {
-      // O_NOFOLLOW: a symlink planted in the folder is refused, never followed.
-      const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW)
+      // O_NOFOLLOW: a symlink planted in the folder is refused, never followed. O_NONBLOCK: a pipe in its
+      // place opens at once (this runs on the screen's thread), and the isFile check below refuses it.
+      const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
       try {
         const info = fstatSync(fd)
         if (!info.isFile() || info.size > MAX_FILE_BYTES) return "{}" // parses as invalid, so the caller deletes it

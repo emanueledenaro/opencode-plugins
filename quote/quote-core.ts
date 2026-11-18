@@ -199,34 +199,46 @@ export const titleLine = (count: number, inner: number): { name: string; counter
 
 export type Scheduler = { set: (fn: () => void, ms: number) => unknown; clear: (handle: unknown) => void }
 
+/** The longest the 1 s sync goes without reading the current session's file. */
+export const SLOW_SYNC_MS = 10_000
+
+export type SyncLook = { stamp: number | undefined; session: string | undefined; listShown: boolean; now: number }
+
 /**
- * Says when the 1 s sync must read the pending files. While a list is shown it reads every time, because the
- * server consumes the file when the message is sent and a list expires. Otherwise it reads only when the
- * folder changed since the last look (`stamp` is its modification time, undefined when it does not exist):
- * a quote added in another window, or a file removed, changes it.
+ * Decides, for each tick of the 1 s sync, whether to read the pending files, and records what the tick saw.
+ * It reads on the first tick; while a list is shown (the server consumes the file when the message is sent,
+ * a list expires); when the folder changed since the last tick (`stamp` is its modification time, undefined
+ * while it does not exist: a quote added in another window, or a file removed, changes it); when the current
+ * session is not the one of the last tick, so a quote another window added for it shows when you switch to
+ * it; and at least every SLOW_SYNC_MS, for a change the folder time cannot show. With nothing shown, a read
+ * touches only the current session's file.
  */
 export function createSyncGate() {
-  let seen: number | undefined | null = null // null: never looked
+  let last: { stamp: number | undefined; session: string | undefined; readAt: number } | undefined
   return {
-    due(stamp: number | undefined, listShown: boolean): boolean {
-      const changed = stamp !== seen
-      seen = stamp
-      return listShown || changed
+    tick(look: SyncLook): boolean {
+      const read =
+        last === undefined ||
+        look.listShown ||
+        look.stamp !== last.stamp ||
+        look.session !== last.session ||
+        look.now < last.readAt || // a clock that went backwards
+        look.now - last.readAt >= SLOW_SYNC_MS
+      last = { stamp: look.stamp, session: look.session, readAt: read ? look.now : last!.readAt }
+      return read
     },
   }
 }
 
 /**
  * Turns a stream of measured widths into few updates: the first real size is applied at once, later
- * ones are coalesced to one update per `delayMs`, and a size that is already shown does nothing.
+ * ones are coalesced to one update per RESIZE_COALESCE_MS, and a size that is already shown does nothing.
  */
 export function createWidthTracker(options: {
   initial: number
   onChange: (width: number) => void
-  delayMs?: number
   scheduler?: Scheduler
 }) {
-  const delay = options.delayMs ?? RESIZE_COALESCE_MS
   const scheduler: Scheduler = options.scheduler ?? {
     set: (fn, ms) => setTimeout(fn, ms),
     clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
@@ -255,7 +267,7 @@ export function createWidthTracker(options: {
         flush()
         return
       }
-      if (handle === undefined) handle = scheduler.set(flush, delay)
+      if (handle === undefined) handle = scheduler.set(flush, RESIZE_COALESCE_MS)
     },
     dispose() {
       disposed = true
