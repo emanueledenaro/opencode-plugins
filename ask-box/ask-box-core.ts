@@ -224,6 +224,14 @@ export function visibleEnd(messages: unknown[], revertID?: unknown): number {
 // decision stays on the last completed reply until the new one is done. A message with no text (only tools or
 // reasoning) is not a reply and is skipped too.
 export function currentAsk(messages: unknown, revertID?: unknown): string | null {
+  return currentRequest(messages, revertID)?.text ?? null
+}
+
+/** `askedAt`: when the reply that asks was completed, in milliseconds, if OpenCode says so. */
+export type Request = { text: string; askedAt?: number }
+
+// currentAsk's text together with the time it was asked, so the box can say how long it has waited.
+export function currentRequest(messages: unknown, revertID?: unknown): Request | null {
   if (!Array.isArray(messages)) return null
   for (let index = visibleEnd(messages, revertID) - 1; index >= 0; index--) {
     const item = messages[index] as
@@ -238,7 +246,39 @@ export function currentAsk(messages: unknown, revertID?: unknown): string | null
       return piece?.type === "text" && typeof piece.text === "string" ? [piece.text] : []
     })
     if (parts.length === 0) continue
-    return extractAsk(parts.join("\n"))
+    const text = extractAsk(parts.join("\n"))
+    if (text === null) return null
+    const completed = item.time?.completed
+    return typeof completed === "number" && Number.isFinite(completed) ? { text, askedAt: completed } : { text }
   }
   return null
+}
+
+// True when two requests would draw the same box, so a list that changed elsewhere redraws nothing.
+export function sameRequest(a: Request | null | undefined, b: Request | null | undefined): boolean {
+  if (!a || !b) return !a && !b
+  return a.text === b.text && a.askedAt === b.askedAt
+}
+
+/**
+ * A span of time the way every panel shows it: "<1m", "12m", "1h 5m", "2g 3h". At most two units, the
+ * smaller one left out when it is 0. A negative or unusable span reads as "<1m".
+ * Keep identical in every core that has it: copies.test.ts at the root lists and compares them.
+ */
+export function relativeIt(ms: number): string {
+  const minutes = Number.isFinite(ms) && ms > 0 ? Math.floor(ms / 60_000) : 0
+  if (minutes < 1) return "<1m"
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return minutes % 60 === 0 ? `${hours}h` : `${hours}h ${minutes % 60}m`
+  const days = Math.floor(hours / 24)
+  return hours % 24 === 0 ? `${days}g` : `${days}g ${hours % 24}h`
+}
+
+// The header of the box: the title and, on the right edge, how long the request has waited ("da 12m").
+// The age is left out when its time is not known or when it does not fit beside the title with a blank.
+export function askHeader(askedAt: number | undefined, now: number, width: number): { title: string; age: string } {
+  const age = askedAt === undefined ? "" : `da ${relativeIt(now - askedAt)}`
+  const fits = Number.isFinite(width) && MARKER.length + 1 + age.length <= width
+  return { title: MARKER, age: fits ? age : "" }
 }

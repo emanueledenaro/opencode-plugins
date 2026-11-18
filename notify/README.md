@@ -6,11 +6,13 @@ An OpenCode 2 plugin that pings you, only when the terminal is not focused, when
 
 | Event | Text | Sound |
 | --- | --- | --- |
-| The main session finishes a reply | `OpenCode: ho finito` | `done` |
-| A run of the main session fails | `OpenCode: mi sono fermato per un errore` | `error` |
-| A permission is asked (any session, also a subagent) | `OpenCode: serve un permesso` | `permission` |
-| A form or question waits for you (any session) | `OpenCode: serve una risposta` | `question` |
+| The main session finishes a reply | `OpenCode: ho finito · Plugin UX` | `done` |
+| A run of the main session fails | `OpenCode: mi sono fermato per un errore · Plugin UX` | `error` |
+| A permission is asked (any session, also a subagent) | `OpenCode: serve un permesso · rilettura #103` | `permission` |
+| A form or question waits for you (any session) | `OpenCode: serve una risposta · rilettura #103` | `question` |
 
+- After the text comes ` · ` and the title of the session the ping is about (`Plugin UX`, `rilettura #103` above), so with several sessions and subagents open you know which one needs you. The title is put on one line, cut at 40 characters with `…`, and loses its control characters, since the ping reaches the terminal inside an escape code. A session that has no real title yet (OpenCode's `New session - …`) pings with the plain text: `OpenCode: serve un permesso`.
+- A notification can show on a locked screen. Set `NOTIFY_NAMES=0` in the environment OpenCode starts with to keep titles out of every ping.
 - A child session (background subagent) finishing or failing is silent on purpose.
 - At most one ping every 20 seconds per OpenCode window (each window keeps its own 20 seconds). A ping that was not delivered (terminal focused) does not use up the 20 seconds.
 - A permission or question that comes inside the 20 seconds pings when they end, unless it was answered first. When several wait, one ping goes out for the latest. A finished or failed run inside the 20 seconds stays silent.
@@ -47,7 +49,7 @@ Unlike the built-in one, this plugin pings when the main session finishes a repl
 
 ## Files
 
-- `notify-core.ts`: pure logic (which event pings, the text and sound, the 20 second gate, the queue for a blocked permission or question).
+- `notify-core.ts`: pure logic (which event pings, the text, the session name and the sound, the 20 second gate, the queue for a blocked permission or question).
 - `tui.tsx`: the event listeners, and the clock, timers and `attention.notify` handed to the core.
 - `index.ts`: an empty server part, so OpenCode loads the directory.
 - `notify-core.test.ts`: `bun test`.

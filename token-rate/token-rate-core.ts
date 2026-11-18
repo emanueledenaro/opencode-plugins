@@ -691,3 +691,24 @@ export function contentWidth(box: LayoutBox): number {
     node.children.length ? Math.max(...node.children.map(right)) : node.x + node.width
   return box.children.length ? Math.max(0, right(box) - box.x) : box.width
 }
+
+// --- look (used by the TUI) ------------------------------------------------------------------
+
+/** The yellow drawn when the theme has no yellow hue: the apple theme's own, on a dark and on a light background. */
+export const CAUTION_YELLOW = { dark: "#ffd60a", light: "#a05a00" } as const
+
+/**
+ * The yellow of a caution: the middle of a scale, a slow reply, a label. OpenCode builds a theme's hues from
+ * its state colours (accent, primary, secondary, success, warning, error, info), so `hue.yellow` exists only
+ * when one of them is yellow. The apple theme has none: its warning colour is orange and means "waits for
+ * you". There the yellow is CAUTION_YELLOW, picked by the text colour, since a theme's background can be
+ * transparent: light text is drawn on a dark background.
+ */
+export function cautionYellow(theme: { hue?: Record<string, Record<number, unknown> | undefined>; text?: { base?: unknown } }): unknown {
+  const own = theme.hue?.yellow?.[200]
+  if (own !== undefined && own !== null) return own
+  const { r, g, b } = (theme.text?.base ?? {}) as { r?: unknown; g?: unknown; b?: unknown }
+  const known = typeof r === "number" && typeof g === "number" && typeof b === "number"
+  const lightText = !known || 0.299 * r + 0.587 * g + 0.114 * b >= 0.5
+  return lightText ? CAUTION_YELLOW.dark : CAUTION_YELLOW.light
+}

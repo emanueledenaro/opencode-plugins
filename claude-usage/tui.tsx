@@ -13,7 +13,6 @@ import {
   createResizeWatch,
   createWidthTracker,
   dialogLayout,
-  failureIt,
   fableLevel,
   fitText,
   hoverTone,
@@ -22,15 +21,21 @@ import {
   FOOTER_ICON,
   footerMessage,
   formatPercent,
+  levelColour,
   meter,
+  needsYou,
+  readingPaceFit,
+  readingWeekLevel,
   resetFit,
   rowBudget,
+  staleIt,
   updatedIt,
   usageLevel,
   weeklyOverThreshold,
   type FooterPart,
   type IconTone,
   type Level,
+  type LevelTheme,
   type MonitorState,
   type MousePoint,
   type TextTone,
@@ -64,12 +69,10 @@ export default Plugin.define({
     // new window must not repeat a warning that was already given.
     const startedAt = Date.now()
     const theme = context.theme
-    const colour = (level: Level) =>
-      level === "high"
-        ? (theme.text.feedback?.error?.base ?? theme.text.base)
-        : level === "warn"
-          ? (theme.text.feedback?.warning?.base ?? theme.text.base)
-          : (theme.text.feedback?.success?.base ?? theme.text.base)
+    // Green, yellow, red of the meters: "giallo" is the theme's yellow hue (see LEVEL_COLOURS).
+    const colour = (level: Level) => levelColour(level, theme as unknown as LevelTheme)
+    // The theme's warning colour (orange in the apple theme) has one meaning here: it waits for you.
+    const waitsForYou = () => theme.text.feedback?.warning?.base ?? theme.text.base
 
     // Text colours by tone. While the mouse is over the footer item each tone is one step brighter.
     const toneColour = (tone: TextTone) => (tone === "base" ? theme.text.base : tone === "muted" ? theme.text.muted : theme.text.faint)
@@ -106,10 +109,7 @@ export default Plugin.define({
     })
 
     // Every read of state() sits inside JSX, so Solid re-renders when new numbers arrive.
-    const loginFailure = () => {
-      const kind = state().failure?.kind
-      return kind === "login-expired" || kind === "no-login" ? state().failure : null
-    }
+    const loginFailure = () => (needsYou(state().failure) ? state().failure : null)
 
     // One window of the footer: "5h ▰▱▱▱▱▱ 23%"; the bar is shorter when room is short.
     const FooterPiece = (props: { part: FooterPart; hovered: boolean }) => {
@@ -118,11 +118,8 @@ export default Plugin.define({
         const value = percent()
         return value === null ? undefined : meter(value, props.part.cells)
       }
-      const fg = () => {
-        const value = percent()
-        if (value === null) return lifted("faint", props.hovered)
-        return colour(props.part.window === "fable" ? fableLevel(value) : usageLevel(value))
-      }
+      // The level comes with the part: the week by its pace, the others by their own lines.
+      const fg = () => (props.part.level === undefined ? lifted("faint", props.hovered) : colour(props.part.level))
       return (
         <box flexDirection="row" flexShrink={0}>
           <text fg={lifted("muted", props.hovered)} wrapMode="none">{`${props.part.label} `}</text>
@@ -207,17 +204,19 @@ export default Plugin.define({
         if (box) box.onSizeChange = undefined
       })
 
-      const layout = createMemo(() =>
-        footerLayout(
+      const layout = createMemo(() => {
+        return footerLayout(
           {
             five: state().snapshot?.fiveHour?.percent ?? null,
             week: state().snapshot?.sevenDay?.percent ?? null,
+            // Judged at the time of the reading, so old numbers keep their colour (see readingWeekLevel).
+            weekLevel: readingWeekLevel(state().snapshot),
             fable: state().snapshot?.fable?.percent ?? null,
             stale: state().failure !== null,
           },
           budget(),
-        ),
-      )
+        )
+      })
       const message = (kind: "login" | "waiting") => footerMessage(kind, budget())
       const iconColour = (tone: IconTone) => (tone === "faint" ? lifted("faint", hovered()) : colour(tone))
       // A click (press and release on the footer, main button) opens the same dialog as /claude-usage.
@@ -277,7 +276,7 @@ export default Plugin.define({
           >
             <Match when={loginFailure()}>
               <Show when={message("login")}>
-                {(text) => <text fg={(theme.text.feedback?.warning?.base ?? theme.text.base)} wrapMode="none">{text()}</text>}
+                {(text) => <text fg={waitsForYou()} wrapMode="none">{text()}</text>}
               </Show>
             </Match>
             <Match when={!state().snapshot}>
@@ -299,16 +298,18 @@ export default Plugin.define({
       ),
     })
 
-    // One row of the dialog: label, meter, percentage, then the reset line underneath. The meter and
-    // the reset line follow the width of the dialog.
+    // One row of the dialog: label, meter, percentage, then the reset line underneath and, for the week,
+    // its colour in words. The meter and the lines follow the width of the dialog.
     const DialogRow = (props: {
       label: string
       window: UsageWindow | null
       cells: number
       inner: number
-      level?: (percent: number) => Level
+      level?: Level
+      note?: (width: number) => string | undefined
     }) => {
       const pad = () => dialogLayout(props.inner).labelWidth
+      const levelOf = (window: UsageWindow) => props.level ?? usageLevel(window.percent)
       return (
         <box flexDirection="column" paddingBottom={1}>
           <box flexDirection="row">
@@ -316,7 +317,7 @@ export default Plugin.define({
             <Show when={props.window} fallback={<text fg={theme.text.faint} wrapMode="none">{fitText("nessuna finestra attiva", Math.max(1, props.inner - pad()))}</text>}>
               {(window) => {
                 const bar = () => meter(window().percent, props.cells)
-                const fg = () => colour((props.level ?? usageLevel)(window().percent))
+                const fg = () => colour(levelOf(window()))
                 return (
                   <box flexDirection="row" flexShrink={0}>
                     <Show when={bar().filled.length > 0}>
@@ -333,9 +334,16 @@ export default Plugin.define({
           </box>
           <Show when={props.window}>
             {(window) => (
-              <text fg={theme.text.muted} wrapMode="none">
-                {`${"".padEnd(pad())}${resetFit(window(), now(), Math.max(1, props.inner - pad()))}`}
-              </text>
+              <>
+                <text fg={theme.text.muted} wrapMode="none">
+                  {`${"".padEnd(pad())}${resetFit(window(), now(), Math.max(1, props.inner - pad()))}`}
+                </text>
+                <Show when={props.note?.(Math.max(1, props.inner - pad()))}>
+                  {(note) => (
+                    <text fg={colour(levelOf(window()))} wrapMode="none">{`${"".padEnd(pad())}${note()}`}</text>
+                  )}
+                </Show>
+              </>
             )}
           </Show>
         </box>
@@ -372,22 +380,30 @@ export default Plugin.define({
             {(snap) => (
               <box flexDirection="column">
                 <DialogRow label="5 ore" window={snap().fiveHour} cells={cells()} inner={inner()} />
-                <DialogRow label="Settimana" window={snap().sevenDay} cells={cells()} inner={inner()} />
+                <DialogRow
+                  label="Settimana"
+                  window={snap().sevenDay}
+                  cells={cells()}
+                  inner={inner()}
+                  level={readingWeekLevel(snap())}
+                  note={(width) => readingPaceFit(snap(), now(), width)}
+                />
                 <Show when={snap().fable}>
-                  {(fable) => <DialogRow label="Fable" window={fable()} cells={cells()} inner={inner()} level={fableLevel} />}
-                </Show>
-                <Show when={weeklyOverThreshold(snap())}>
-                  <text fg={(theme.text.feedback?.error?.base ?? theme.text.base)}>
-                    {`Sopra il ${WEEKLY_THRESHOLD_PERCENT}%: stai usando la riserva del ${100 - WEEKLY_THRESHOLD_PERCENT}%.`}
-                  </text>
-                  <text>{" "}</text>
+                  {(fable) => (
+                    <DialogRow label="Fable" window={fable()} cells={cells()} inner={inner()} level={fableLevel(fable().percent)} />
+                  )}
                 </Show>
                 <text fg={theme.text.faint}>{updatedIt(snap().fetchedAt, now())}</text>
               </box>
             )}
           </Show>
           <Show when={state().failure}>
-            {(failure) => <text fg={(theme.text.feedback?.warning?.base ?? theme.text.base)}>{`Ultimo aggiornamento non riuscito: ${failureIt(failure())}`}</text>}
+            {(failure) => (
+              // Orange only when it waits for you (sign in again); a retry that comes by itself is plain grey.
+              <text fg={needsYou(failure()) ? waitsForYou() : theme.text.muted}>
+                {staleIt(failure(), state().nextAllowedAt - now())}
+              </text>
+            )}
           </Show>
           <text>{" "}</text>
           <text fg={theme.text.faint}>esc per chiudere</text>

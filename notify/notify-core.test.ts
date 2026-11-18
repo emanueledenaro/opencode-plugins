@@ -1,5 +1,15 @@
 import { describe, expect, test } from "bun:test"
-import { DEBOUNCE_MS, createGate, createNotifier, createSeen, noticeFor, type Kind, type NotifyResult } from "./notify-core"
+import {
+  DEBOUNCE_MS,
+  NAME_MAX,
+  createGate,
+  createNotifier,
+  createSeen,
+  noticeFor,
+  sessionName,
+  type Kind,
+  type NotifyResult,
+} from "./notify-core"
 
 describe("createGate", () => {
   test("lets the first notification through and blocks the ones inside 20 seconds", () => {
@@ -79,6 +89,64 @@ describe("noticeFor", () => {
     expect(noticeFor("form", { parentID: undefined })).toEqual(notice)
     expect(noticeFor("form", { parentID: "ses_parent" })).toEqual(notice)
     expect(noticeFor("form", undefined)).toEqual(notice)
+  })
+})
+
+describe("noticeFor, which session the ping is about", () => {
+  test("a permission from a subagent names that subagent", () => {
+    expect(noticeFor("permission", { parentID: "ses_parent", title: "rilettura #103" })).toEqual({
+      title: "OpenCode",
+      message: "serve un permesso · rilettura #103",
+      sound: "permission",
+    })
+  })
+
+  test("every kind of ping carries the name after its text", () => {
+    const main = { parentID: undefined, title: "Plugin UX" }
+    expect(noticeFor("done", main)?.message).toBe("ho finito · Plugin UX")
+    expect(noticeFor("failed", main)?.message).toBe("mi sono fermato per un errore · Plugin UX")
+    expect(noticeFor("form", main)?.message).toBe("serve una risposta · Plugin UX")
+  })
+
+  test("a session with no real title pings with the plain text", () => {
+    for (const title of [undefined, "", "   ", "New session - 2026-11-18T10:00:00.000Z", "Child session - 2026-11-18T10:00:00.000Z"]) {
+      expect(noticeFor("permission", { parentID: "ses_parent", title })?.message).toBe("serve un permesso")
+    }
+  })
+
+  test("named false leaves the name out", () => {
+    expect(noticeFor("permission", { parentID: "ses_parent", title: "rilettura #103" }, false)?.message).toBe("serve un permesso")
+  })
+
+  test("a named child that finishes is still silent", () => {
+    expect(noticeFor("done", { parentID: "ses_parent", title: "rilettura #103" })).toBeUndefined()
+  })
+})
+
+describe("sessionName", () => {
+  test("a title is put on one line", () => {
+    expect(sessionName("  rilettura\n#103\t ")).toBe("rilettura #103")
+  })
+
+  test("control characters are removed, so a title cannot end or rewrite the terminal's escape code", () => {
+    expect(sessionName("a\u001b]9;falso\u0007b")).toBe("a]9;falsob")
+    expect(sessionName("a\u009cb\u007fc\u0000d")).toBe("abcd")
+  })
+
+  test("a long title is cut at 40 characters with an ellipsis", () => {
+    expect(NAME_MAX).toBe(40)
+    expect(sessionName("a".repeat(40))).toBe("a".repeat(40))
+    expect(sessionName("a".repeat(41))).toBe(`${"a".repeat(39)}…`)
+  })
+
+  test("the cut never splits an emoji", () => {
+    expect(sessionName(`${"a".repeat(38)}😀bcd`)).toBe(`${"a".repeat(38)}😀…`)
+  })
+
+  test("something that is not a string is no name", () => {
+    expect(sessionName(undefined)).toBeUndefined()
+    expect(sessionName(42)).toBeUndefined()
+    expect(sessionName("\u0007\u001b")).toBeUndefined()
   })
 })
 

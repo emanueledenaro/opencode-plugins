@@ -52,7 +52,6 @@ export default Plugin.define({
 
     const theme = context.theme
     const primary = theme.text.action?.primary?.base ?? theme.text.base
-    const warning = theme.text.feedback?.warning?.base ?? theme.text.base
     const fs = createPendingFs()
     sweepExpired(fs)
 
@@ -313,7 +312,7 @@ export default Plugin.define({
     const unregisterSlot = context.ui.slot({
       append: "session.composer.top",
       render: (input: { sessionID: string }) => (
-        <ErrorBoundary fallback={<text fg={warning}>{"Citazione: errore di visualizzazione"}</text>}>
+        <ErrorBoundary fallback={<text fg={theme.text.faint}>{"Citazioni: non disponibile"}</text>}>
           <Chip sessionID={input.sessionID} />
         </ErrorBoundary>
       ),

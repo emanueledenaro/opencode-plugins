@@ -22,9 +22,10 @@ OpenCode 2 reports a reply as events, which the plugin turns into the same input
 ```
 
 - The sparkline is the last 6 replies of the session you are viewing (or of the latest session measured anywhere, if yours has none). It is in the faint colour, the number after it in the muted colour.
-- The number turns to the warning colour when it is under 60% of the median of that model's last 20 earlier replies (from the log and from this run). It needs at least 5 earlier replies, otherwise there is nothing fair to compare with. This is the only accent.
+- The number turns yellow (the same yellow as the middle of the usage meters beside it, never the theme's warning colour: orange means "waits for you" in these plugins) when it is under 60% of the median of that model's last 20 earlier replies (from the log and from this run). It needs at least 5 earlier replies, otherwise there is nothing fair to compare with. This is the only accent.
 - While a reply streams, the sparkline becomes a small spinner of quadrant blocks (`▖ 126 tok/s`; SF Mono and Menlo have them, they have no braille) and the number is a live estimate, updated at most every 500 ms. The estimate counts about 4 characters per token, because real token counts only arrive when the reply ends. When it ends, the figure settles on the real one. The live number is never shown in the warning colour.
 - Nothing is shown before the first measurement.
+- If the item cannot be drawn it shows `tok/s: non disponibile` in the faint colour, the wording the other plugins use.
 
 OpenCode's own message footer also shows a `tok/s`. That one includes the wait for the first token, so it reads a little lower.
 
@@ -83,7 +84,7 @@ Add the `token-rate` folder to `plugin` in `~/.config/opencode/opencode.json` (a
 
 Run `/reload`.
 
-Colours come from the active theme (`text.faint`, `text.muted`, `text.base`, `text.feedback.warning`), read at draw time, so a theme change shows on the next frame.
+Colours come from the active theme (`text.faint`, `text.muted`, `text.base`, and `hue.yellow` when the theme has one), read at draw time. The apple theme has no yellow hue: OpenCode builds a theme's hues from its seven state colours and none of them is yellow there. So for a slow reply the plugin carries the apple theme's own yellow, `#ffd60a` under light text and `#a05a00` under dark text. All of it is read at draw time, so a theme change shows on the next frame.
 
 ## Files
 

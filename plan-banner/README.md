@@ -10,6 +10,8 @@ La mia ultima risposta era in Plan: per farmi lavorare premi Shift+Tab e scrivim
 
 The sentence follows the width of the prompt: the full text, then shorter wordings (`Plan: premi Shift+Tab`), then just `Plan`, and nothing when even that does not fit. The key comes from the binding of the `agent.cycle` command (`context.keymap.shortcuts("agent.cycle")`), so it follows your keymap. If it cannot be read, it says `Shift+Tab`. The line disappears once a reply arrives under another agent. Nothing is shown when the last reply came from any agent other than `plan`.
 
+If the line cannot be drawn it shows `Avviso Plan: non disponibile` in the faint colour, the wording the other plugins use.
+
 ## Why it says "last reply"
 
 OpenCode 2.2.6 does not give plugins the agent currently selected in the prompt. The session's own `agent` only changes when a message is sent. The one thing a plugin can confirm is the `agent` field on each assistant message in `context.data.session.message.list(sessionID)`. So the banner states only that: the agent of the last reply.

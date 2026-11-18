@@ -1,6 +1,7 @@
 // TUI part of the notify plugin (OpenCode 2 plugin API, docs: /build/plugins/cli).
 // A macOS notification and a short sound, only when the terminal is not focused, when the main session
-// finishes or fails a reply, a permission is asked or a form/question waits for you. At most one every 20 seconds;
+// finishes or fails a reply, a permission is asked or a form/question waits for you. The ping names the
+// session it is about. At most one every 20 seconds;
 // a permission or question that meets the 20 seconds pings when they end.
 // The rules are in ./notify-core.ts (tested), see ./README.md.
 import { Plugin } from "@opencode/plugin/tui"
@@ -43,8 +44,10 @@ export default Plugin.define({
       trace,
     })
 
+    // NOTIFY_NAMES=0 keeps session titles out of the pings (a notification can show on a locked screen).
+    const named = process.env.NOTIFY_NAMES !== "0"
     const send = (kind: Kind, sessionID: string | undefined, requestID?: string) => {
-      const notice = noticeFor(kind, sessionID ? context.data.session.get(sessionID) : undefined)
+      const notice = noticeFor(kind, sessionID ? context.data.session.get(sessionID) : undefined, named)
       if (!notice) return trace(`${kind}: silent`)
       notifier.send({ kind, notice, requestID })
     }

@@ -140,11 +140,41 @@ const NOTICES: Record<Kind, Notice> = {
 /** Only the main (parentless) session announces that it finished or failed; a child doing so is too noisy. */
 const MAIN_SESSION_ONLY: ReadonlySet<Kind> = new Set<Kind>(["done", "failed"])
 
+/** The longest session name a ping carries; a longer one is cut with "…". */
+export const NAME_MAX = 40
+
+// The title OpenCode gives a session before it has a real one.
+const DEFAULT_TITLE = /^(Child|New) session - /
+
+/**
+ * A session title as it may go into a ping: one line, at most NAME_MAX characters, and no control
+ * characters, because the ping reaches the terminal inside an escape code that such a character could
+ * end or rewrite. Undefined when there is no real title (none, empty, or OpenCode's default one).
+ */
+export function sessionName(title: unknown): string | undefined {
+  if (typeof title !== "string") return undefined
+  const text = title
+    .replace(/\s+/g, " ")
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, "")
+    .trim()
+  if (text === "" || DEFAULT_TITLE.test(text)) return undefined
+  const chars = [...text] // by character, so an emoji is never cut in half
+  return chars.length <= NAME_MAX ? text : `${chars.slice(0, NAME_MAX - 1).join("")}…`
+}
+
 /**
  * `session` is what OpenCode knows about the session the event belongs to (undefined if nothing).
  * A permission or a form is always worth a ping, also from a child, because the child waits for you.
+ * The ping names the session ("serve un permesso · rilettura #103") so that, with several sessions and
+ * subagents open, you know which one; `named` false leaves the name out.
  */
-export function noticeFor(kind: Kind, session: { parentID?: string } | undefined): Notice | undefined {
+export function noticeFor(
+  kind: Kind,
+  session: { parentID?: string; title?: string } | undefined,
+  named = true,
+): Notice | undefined {
   if (MAIN_SESSION_ONLY.has(kind) && (!session || session.parentID)) return undefined
-  return { ...NOTICES[kind] }
+  const notice = NOTICES[kind]
+  const name = named ? sessionName(session?.title) : undefined
+  return name === undefined ? { ...notice } : { ...notice, message: `${notice.message} · ${name}` }
 }

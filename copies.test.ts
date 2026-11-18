@@ -1,5 +1,7 @@
 // OpenCode reloads only the files inside a plugin folder, so a helper two plugins need is copied into each.
-// These tests keep the copies identical: change one, change all of them.
+// These tests keep the copies identical: change one, change all of them. They also keep what the plugins
+// share in their look: one wording and one colour for a panel that cannot be drawn, one meaning for the
+// theme's warning colour, one pace for a clock that shows minutes.
 import { describe, expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
@@ -31,5 +33,122 @@ describe("copied helpers stay identical", () => {
 
   test("createResizeWatch", () => {
     expectSameCopies("createResizeWatch", ["token-rate/token-rate-core.ts", "claude-usage/claude-usage-core.ts"])
+  })
+
+  // One yellow for a caution, in every panel that draws one.
+  test("cautionYellow", () => {
+    expectSameCopies("cautionYellow", ["claude-usage/claude-usage-core.ts", "token-rate/token-rate-core.ts", "agents-panel/agents-core.ts"])
+  })
+
+  // One time format in every panel: "<1m", "12m", "1h 5m", "2g 3h".
+  test("relativeIt", () => {
+    expectSameCopies("relativeIt", ["agents-panel/agents-core.ts", "claude-usage/claude-usage-core.ts", "ask-box/ask-box-core.ts"])
+  })
+})
+
+/** Every `<ErrorBoundary fallback={...}>` of a tui file: the text it shows and the colour expression of that text. */
+const fallbacks = (file: string): { text: string; colour: string }[] => {
+  const source = readFileSync(join(import.meta.dir, file), "utf8")
+  return [...source.matchAll(/<ErrorBoundary fallback=\{.*?<text fg=\{([^}]+)\}[^>]*>\{"([^"]+)"\}<\/text>/g)].map(
+    ([, colour, text]) => ({ text: text!, colour: colour! }),
+  )
+}
+
+describe("a panel that cannot be drawn says so the same way in every plugin", () => {
+  // The first line of each plugin is the one drawn in its slot, the second (if any) the one of its dialog.
+  const expected: Record<string, string[]> = {
+    "agents-panel/tui.tsx": ["Subagenti: non disponibile"],
+    "ask-box/tui.tsx": ["Serve da te: non disponibile"],
+    "plan-banner/tui.tsx": ["Avviso Plan: non disponibile"],
+    "quote/tui.tsx": ["Citazioni: non disponibile"],
+    "claude-usage/tui.tsx": ["Claude: uso non disponibile", "Uso non disponibile."],
+    "token-rate/tui.tsx": ["tok/s: non disponibile", "Velocità non disponibile."],
+  }
+
+  test("the wording is '<name>: non disponibile' in a slot and '<Name> non disponibile.' in a dialog", () => {
+    for (const [file, texts] of Object.entries(expected)) {
+      expect({ file, texts: fallbacks(file).map((each) => each.text) }).toEqual({ file, texts })
+      expect(texts[0]).toMatch(/^[^:]+: (uso )?non disponibile$/)
+      if (texts[1] !== undefined) expect(texts[1]).toMatch(/^\S+ non disponibile\.$/)
+    }
+  })
+
+  test("the line is faint: the warning colour means 'waits for you' and is never used for it", () => {
+    for (const file of Object.keys(expected)) {
+      for (const each of fallbacks(file)) {
+        expect({ file, colour: each.colour }).toEqual({ file, colour: expect.stringContaining("faint") })
+        expect(each.colour).not.toContain("warning")
+      }
+    }
+  })
+})
+
+/** The lines of code (not comments) of a file. */
+const codeLines = (file: string): string[] =>
+  readFileSync(join(import.meta.dir, file), "utf8")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line !== "" && !line.startsWith("//") && !line.startsWith("*") && !line.startsWith("/*"))
+
+describe("the theme's warning colour means one thing: it waits for you", () => {
+  // In the owner's theme the warning colour is orange. A caution (the middle of a scale, a slow reply) is
+  // yellow and never reads the warning colour. The number is how many lines of each tui file read it, and
+  // what for.
+  const reads: Record<string, number> = {
+    "agents-panel/tui.tsx": 1, // groupColour("waiting"): the "Ti aspetta" group and "1 ti aspetta" in the header
+    "ask-box/tui.tsx": 1, // the "Serve da te" title
+    "plan-banner/tui.tsx": 1, // the Plan line: your next message runs under Plan until you switch
+    "claude-usage/tui.tsx": 1, // waitsForYou(): "accesso scaduto, apri claude" in the footer and the dialog
+    "token-rate/tui.tsx": 0,
+    "quote/tui.tsx": 0,
+    "notify/tui.tsx": 0,
+  }
+  const yellowCores = ["claude-usage/claude-usage-core.ts", "token-rate/token-rate-core.ts", "agents-panel/agents-core.ts"]
+
+  test("no tui file draws it for anything else", () => {
+    const found = Object.fromEntries(
+      Object.keys(reads).map((file) => [file, codeLines(file).filter((line) => /feedback\??\.warning/.test(line)).length]),
+    )
+    expect(found).toEqual(reads)
+  })
+
+  test("a caution is yellow: the usage levels, a slow reply and the Haiku label take cautionYellow", () => {
+    expect(codeLines("claude-usage/tui.tsx")).toContain("const colour = (level: Level) => levelColour(level, theme as unknown as LevelTheme)")
+    expect(functionText("claude-usage/claude-usage-core.ts", "levelColour")).toContain("return cautionYellow(theme)")
+    expect(functionText("agents-panel/agents-core.ts", "modelColour")).toContain("return cautionYellow(theme)")
+    const tokenRate = codeLines("token-rate/tui.tsx")
+    expect(tokenRate.slice(tokenRate.indexOf("get slow() {"), tokenRate.indexOf("get slow() {") + 2)).toEqual(["get slow() {", "return cautionYellow(theme)"])
+    for (const file of yellowCores) {
+      expect({ file, warning: functionText(file, "cautionYellow")?.includes("warning") }).toEqual({ file, warning: false })
+    }
+  })
+
+  // OpenCode gives the apple theme no yellow hue (none of its state colours is yellow), so the plugins
+  // carry its yellow themselves. It stays the theme's own: `yellow` in dark mode, `lyellow` in light mode.
+  test("the yellow is the apple theme's own, the same in every copy", () => {
+    const { defs } = JSON.parse(readFileSync(join(import.meta.dir, "apple-theme/apple.json"), "utf8")) as { defs: Record<string, string> }
+    const line = `export const CAUTION_YELLOW = { dark: "${defs.yellow}", light: "${defs.lyellow}" } as const`
+    expect(line).toBe('export const CAUTION_YELLOW = { dark: "#ffd60a", light: "#a05a00" } as const')
+    for (const file of yellowCores) expect({ file, has: codeLines(file).includes(line) }).toEqual({ file, has: true })
+  })
+})
+
+describe("a clock that shows minutes moves twice a minute", () => {
+  // Every tick redraws the rows that read it. Times are written in minutes ("12m", "da 2m"), so a faster
+  // clock redraws the same text.
+  test("in every plugin that has one", () => {
+    const clocks = {
+      "agents-panel/tui.tsx": "CLOCK_MS",
+      "ask-box/tui.tsx": "CLOCK_MS",
+      "claude-usage/tui.tsx": "TICK_MS",
+    }
+    for (const [file, name] of Object.entries(clocks)) {
+      const lines = codeLines(file)
+      const value = lines.flatMap((line) => line.match(new RegExp(`^const ${name} = ([0-9_]+)`))?.[1] ?? [])
+      expect({ file, value }).toEqual({ file, value: ["30_000"] })
+      // The constant is the one the timer runs on, not a leftover.
+      const used = lines.some((line) => line.includes(name) && /setInterval\(|Math\.min\(/.test(line))
+      expect({ file, used }).toEqual({ file, used: true })
+    }
   })
 })

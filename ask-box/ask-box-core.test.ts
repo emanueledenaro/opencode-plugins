@@ -1,8 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import {
   MAX_ASK_LINES,
+  askHeader,
   askLineCap,
   askText,
+  currentRequest,
+  relativeIt,
+  sameRequest,
   createWidthTracker,
   capAsk,
   currentAsk,
@@ -248,6 +252,80 @@ describe("currentAsk on long, streaming and reverted sessions", () => {
   test("stops at the last user message without reading older replies", () => {
     const poisoned = { type: "assistant", get content(): unknown { throw new Error("read an old reply") } }
     expect(currentAsk([poisoned, { type: "user", text: "ciao" }, ask(2)])).toBe("domanda 2")
+  })
+})
+
+describe("currentRequest, the ask and when it was asked", () => {
+  const MIN = 60_000
+  const NOW = 1_800_000_000_000
+  const asking = (text: string, time?: object) => ({ type: "assistant", content: [{ type: "text", text }], ...(time ? { time } : {}) })
+
+  test("the time is the moment the reply was completed, not when it was started", () => {
+    const messages = [user("uno"), asking("Serve da te: scegli A o B?", { created: NOW - 20 * MIN, completed: NOW - 12 * MIN })]
+    expect(currentRequest(messages)).toEqual({ text: "scegli A o B?", askedAt: NOW - 12 * MIN })
+  })
+
+  test("the time belongs to the reply that asks, not to an older one", () => {
+    const messages = [
+      asking("Serve da te: prima", { completed: NOW - 50 * MIN }),
+      asking("Serve da te: dopo", { completed: NOW - 3 * MIN }),
+    ]
+    expect(currentRequest(messages)).toEqual({ text: "dopo", askedAt: NOW - 3 * MIN })
+  })
+
+  test("a reply with no time, or a time that is not a number, gives the ask without a time", () => {
+    expect(currentRequest([asking("Serve da te: scegli")])).toEqual({ text: "scegli" })
+    expect(currentRequest([asking("Serve da te: scegli", { completed: "2026-11-18" })])).toEqual({ text: "scegli" })
+    expect(currentRequest([asking("Serve da te: scegli", { completed: Number.POSITIVE_INFINITY })])).toEqual({ text: "scegli" })
+  })
+
+  test("it is null exactly when currentAsk is null", () => {
+    expect(currentRequest(undefined)).toBeNull()
+    expect(currentRequest([asking("Serve da te: scegli", { completed: NOW }), user("A")])).toBeNull()
+    expect(currentRequest([asking("Fatto.", { completed: NOW })])).toBeNull()
+  })
+
+  test("sameRequest: the same text and time draw the same box", () => {
+    expect(sameRequest({ text: "a", askedAt: 1 }, { text: "a", askedAt: 1 })).toBe(true)
+    expect(sameRequest({ text: "a", askedAt: 1 }, { text: "b", askedAt: 1 })).toBe(false)
+    expect(sameRequest({ text: "a", askedAt: 1 }, { text: "a", askedAt: 2 })).toBe(false)
+    expect(sameRequest({ text: "a" }, { text: "a" })).toBe(true)
+    expect(sameRequest(null, null)).toBe(true)
+    expect(sameRequest(null, { text: "a" })).toBe(false)
+    expect(sameRequest({ text: "a" }, undefined)).toBe(false)
+  })
+})
+
+describe("askHeader", () => {
+  const MIN = 60_000
+  const NOW = 1_800_000_000_000
+
+  test("says how long the request has waited, in the shared time format", () => {
+    expect(askHeader(NOW - 12 * MIN, NOW, 32)).toEqual({ title: "Serve da te", age: "da 12m" })
+    expect(askHeader(NOW - 65 * MIN, NOW, 32)).toEqual({ title: "Serve da te", age: "da 1h 5m" })
+    expect(askHeader(NOW - 20_000, NOW, 32)).toEqual({ title: "Serve da te", age: "da <1m" })
+  })
+
+  test("a request with no known time has no age", () => {
+    expect(askHeader(undefined, NOW, 32)).toEqual({ title: "Serve da te", age: "" })
+  })
+
+  test("a time in the future (clock skew) reads as just asked", () => {
+    expect(askHeader(NOW + 5 * MIN, NOW, 32).age).toBe("da <1m")
+  })
+
+  test("the age is left out when it does not fit beside the title with a blank", () => {
+    // "Serve da te" is 11 columns, "da 12m" is 6: 18 is the first width that holds both.
+    expect(askHeader(NOW - 12 * MIN, NOW, 18).age).toBe("da 12m")
+    expect(askHeader(NOW - 12 * MIN, NOW, 17).age).toBe("")
+    expect(askHeader(NOW - 12 * MIN, NOW, Number.NaN).age).toBe("")
+  })
+})
+
+describe("relativeIt", () => {
+  test("the same format as the other plugins", () => {
+    const MIN = 60_000
+    expect([relativeIt(0), relativeIt(12 * MIN), relativeIt(65 * MIN), relativeIt(51 * 60 * MIN)]).toEqual(["<1m", "12m", "1h 5m", "2g 3h"])
   })
 })
 
