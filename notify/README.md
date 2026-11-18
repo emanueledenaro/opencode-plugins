@@ -12,6 +12,7 @@ An OpenCode 2 plugin that pings you, only when the terminal is not focused, when
 
 - A child session (background subagent) finishing is silent on purpose.
 - At most one ping every 20 seconds. A ping that was not delivered (terminal focused) does not use up the 20 seconds.
+- A permission or question that comes inside the 20 seconds pings when they end, unless it was answered first. When several wait, one ping goes out for the latest. A finished reply inside the 20 seconds stays silent.
 - Each permission or question pings once, until it is answered.
 - An interrupted or failed run is silent.
 
@@ -45,8 +46,8 @@ Unlike the built-in one, this plugin pings when the main session finishes a repl
 
 ## Files
 
-- `notify-core.ts`: pure logic (which event pings, the text, the 20 second gate).
-- `tui.tsx`: the event listeners and the call to `attention.notify`.
+- `notify-core.ts`: pure logic (which event pings, the text, the 20 second gate, the queue for a blocked permission or question).
+- `tui.tsx`: the event listeners, and the clock, timers and `attention.notify` handed to the core.
 - `index.ts`: an empty server part, so OpenCode loads the directory.
 - `notify-core.test.ts`: `bun test`.
 
