@@ -1157,6 +1157,15 @@ describe("createResizeWatch", () => {
     watch.dispose()
     expect(row.listeners.size).toBe(0)
   })
+
+  test("follow after dispose adds nothing: a measure queued before cleanup cannot listen again", () => {
+    const row = fakeNode()
+    const watch = createResizeWatch(() => {})
+    watch.follow([row])
+    watch.dispose()
+    watch.follow([row])
+    expect(row.listeners.size).toBe(0)
+  })
 })
 
 describe("createShrinkHold", () => {
@@ -1197,6 +1206,15 @@ describe("createShrinkHold", () => {
     hold.hold(first)
     hold.hold(second)
     expect([first.flexShrink, second.flexShrink]).toEqual([3, 50])
+  })
+
+  test("dispose puts the value back, and a hold after it writes nothing", () => {
+    const hold = createShrinkHold(50)
+    const status = box(3)
+    hold.hold(status)
+    hold.dispose()
+    hold.hold(status)
+    expect(status.flexShrink).toBe(3)
   })
 
   test("a node without flexShrink, or one already destroyed, is not written", () => {

@@ -483,15 +483,18 @@ export function padColumns(rows: string[][], align: ("left" | "right")[]): strin
 
 /**
  * Listens to "resize" on exactly the nodes last passed to `follow`: new ones are added and nodes that left
- * are let go, so a node the host swapped out of the row is not kept alive. `dispose` lets go of all of them.
+ * are let go, so a node the host swapped out of the row is not kept alive. `dispose` lets go of all of them
+ * and is final: a later `follow` does nothing.
  * Keep identical in token-rate-core.ts and claude-usage-core.ts: copies.test.ts at the root compares them.
  */
 export function createResizeWatch(onResize: () => void) {
   type Resizable = { on: (event: string, listener: () => void) => unknown; off?: (event: string, listener: () => void) => unknown }
   const isResizable = (node: unknown): node is Resizable => typeof (node as { on?: unknown } | null)?.on === "function"
   const watched = new Set<Resizable>()
+  let disposed = false
   return {
     follow(nodes: readonly unknown[]) {
+      if (disposed) return // a measure queued before cleanup may still call this
       const current = new Set(nodes.filter(isResizable))
       for (const node of watched) {
         if (current.has(node)) continue
@@ -505,6 +508,7 @@ export function createResizeWatch(onResize: () => void) {
       }
     },
     dispose() {
+      disposed = true
       for (const node of watched) node.off?.("resize", onResize)
       watched.clear()
     },
@@ -519,6 +523,7 @@ export function createResizeWatch(onResize: () => void) {
 export function createShrinkHold(shrink: number) {
   type Shrinkable = { flexShrink?: unknown; isDestroyed?: unknown }
   let held: { node: Shrinkable; was: unknown } | undefined
+  let disposed = false
   const release = () => {
     const current = held
     held = undefined
@@ -528,7 +533,7 @@ export function createShrinkHold(shrink: number) {
   }
   return {
     hold(node: Shrinkable) {
-      if (held?.node === node) return
+      if (disposed || held?.node === node) return
       release()
       try {
         if (!node || !("flexShrink" in node)) return
@@ -537,6 +542,11 @@ export function createShrinkHold(shrink: number) {
       } catch {}
     },
     release,
+    /** Puts the value back for good: a hold after it (a measure queued before cleanup) writes nothing. */
+    dispose() {
+      disposed = true
+      release()
+    },
   }
 }
 // The footer row is shared with other plugins and OpenCode's own hints. The footer takes only the room

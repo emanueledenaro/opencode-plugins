@@ -57,7 +57,7 @@ Every measurement is appended as one JSON line to:
 
 `$XDG_STATE_HOME/opencode/token-rate.jsonl` (default `~/.local/state/opencode/token-rate.jsonl`, the same file and format the old plugin wrote)
 
-Fields: `timestamp`, `sessionID`, `messageID`, `providerID`, `modelID`, `outputTokens`, `timeToFirstTokenMs`, `generationMs`, `tokensPerSecond`. No prompt or reply text. The file grows by about 250 bytes per reply; delete it any time. Set `TOKEN_RATE_LOG=off` to stop writing it. Past 4 MB the log moves to `token-rate.jsonl.1` (one old file is kept). Lines are appended one at a time, so two replies that end together at that point keep both lines and the old file.
+Fields: `timestamp`, `sessionID`, `messageID`, `providerID`, `modelID`, `outputTokens`, `timeToFirstTokenMs`, `generationMs`, `tokensPerSecond`. No prompt or reply text. The file grows by about 250 bytes per reply; delete it any time. Set `TOKEN_RATE_LOG=off` to stop writing it. Past 4 MB the log moves to `token-rate.jsonl.1` (one old file is kept). Within one OpenCode window lines are appended one at a time, so two replies that end together at that point keep both lines and the old file. Two windows rotating at the same moment can still lose a line.
 
 Reading is careful: the file is opened with `O_NOFOLLOW` (a symlink in its place is refused), only the last 1 MB is read (about 4000 replies, the first line of that tail is dropped as it may be cut), and it happens once at start for the colour rule and once each time the dialog opens, never per frame. A missing or unreadable log just means no history. A reply logged twice by two open windows counts once.
 

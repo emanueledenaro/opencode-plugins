@@ -203,33 +203,37 @@ export default Plugin.define({
         cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
         onSettle: setRoom,
       })
-      const measure = () => {
+      // Listens to resize on the row and on each item in it now (the host swaps items in and out), lets the
+      // path take the cut, and reports the room left. After cleanup the watch and the hold are disposed, so a
+      // call queued before it changes nothing on the host's nodes.
+      const followRowAndMeasure = () => {
         // A layout node can be gone or half built while OpenCode rebuilds the row: skip this round.
         try {
-          measureRow()
+          const row = box?.parent
+          if (!row || typeof row.getChildren !== "function") return
+          const items: any[] = row.getChildren()
+          resizes.follow([row, ...items])
+          const siblings = items.filter((item) => item !== box)
+          const first = siblings[0]
+          const isPath = letPathTakeTheCut(first)
+          settler.observe(
+            footerRoom({
+              rowWidth: row.width,
+              siblingWidths: siblings.map((item) => item.width),
+              flexibleIndex: first ? 0 : undefined,
+              flexibleFloor: first && !isPath ? contentWidth(layoutOf(first)) : undefined,
+            }),
+          )
         } catch {}
       }
-      const measureRow = () => {
-        const row = box?.parent
-        if (!row || typeof row.getChildren !== "function") return
-        const items: any[] = row.getChildren()
-        resizes.follow([row, ...items])
-        const siblings = items.filter((item) => item !== box)
-        // The first item is stretched to fill the row. Idle it holds the working-directory path, which
-        // truncates itself, so it may give up cells. While a reply streams it holds OpenCode's
-        // "esc interrupt" hint: that must never be cut, so it keeps all of its content.
-        const first = siblings[0]
+      // The first item is stretched to fill the row. Idle it holds the working-directory path, which
+      // truncates itself, so it may give up cells: its flexShrink is raised. While a reply streams it holds
+      // OpenCode's "esc interrupt" hint: that must never be cut, so its own value is put back.
+      const letPathTakeTheCut = (first: any): boolean => {
         const isPath = first !== undefined && isPathItem(first)
         if (isPath) pathShrink.hold(first)
         else pathShrink.release()
-        settler.observe(
-          footerRoom({
-            rowWidth: row.width,
-            siblingWidths: siblings.map((item) => item.width),
-            flexibleIndex: first ? 0 : undefined,
-            flexibleFloor: first && !isPath ? contentWidth(layoutOf(first)) : undefined,
-          }),
-        )
+        return isPath
       }
       // When the row is too full, flexbox takes cells from every item in proportion to its size, so
       // claude-usage would lose a meter cell. The path already truncates itself, so it is told to take
@@ -238,8 +242,8 @@ export default Plugin.define({
       const pathShrink = createShrinkHold(PATH_SHRINK)
       // A resize of the row or of any item in it re-measures; an unchanged result does no work. Nodes the
       // host swaps out of the row are let go.
-      const resizes = createResizeWatch(measure)
-      const first = setTimeout(measure, 0)
+      const resizes = createResizeWatch(followRowAndMeasure)
+      const first = setTimeout(followRowAndMeasure, 0)
       // The first item of the row changes when a reply starts or ends (path <-> interrupt hint): look again.
       let again: ReturnType<typeof setTimeout> | undefined
       const isLive = createMemo(() => view()?.live === true)
@@ -248,7 +252,7 @@ export default Plugin.define({
           isLive,
           () => {
             clearTimeout(again)
-            again = setTimeout(measure, LAYOUT_SETTLE_MS)
+            again = setTimeout(followRowAndMeasure, LAYOUT_SETTLE_MS)
           },
           { defer: true },
         ),
@@ -258,7 +262,7 @@ export default Plugin.define({
         clearTimeout(again)
         settler.dispose()
         resizes.dispose()
-        pathShrink.release()
+        pathShrink.dispose()
       })
 
       const fit = createMemo(() => fitFooter(view(), room() ?? 0))
