@@ -20,7 +20,8 @@ import {
   type ModelKey,
 } from "./agents-core.ts"
 
-const CLOCK_MS = 5_000
+// The times count minutes, so the clock moves twice a minute; a faster one only rebuilds the rows.
+const CLOCK_MS = 30_000
 const SPIN_MS = 140
 const BOLD = 1
 const DIM = 2
@@ -212,7 +213,10 @@ export default Plugin.define({
       // The sidebar can be any width, so the panel measures itself; a burst of resizes is one update.
       const [width, setWidth] = createSignal(DEFAULT_WIDTH)
       const tracker = createWidthTracker({ initial: DEFAULT_WIDTH, onChange: setWidth })
-      const view = createMemo(() => buildView(childrenOf(props.sessionID), runs(), now(), width()))
+      const view = createMemo(() => {
+        now() // read so the times are drawn again on each tick; they count from the real time
+        return buildView(childrenOf(props.sessionID), runs(), Date.now(), width())
+      })
       const showModel = () => rowLayout(width()).showModel
       const spinning = createMemo(() => view().groups.some((g) => g.kind === "working"))
       createEffect(() => {

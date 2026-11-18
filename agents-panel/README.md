@@ -63,7 +63,7 @@ All of it is already in OpenCode's TUI data store, through the documented plugin
 ## Files
 
 - `agents-core.ts`: pure logic (layout, alignment, truncation, groups, row cap, times, the wording of a tool call, the model hues).
-- `tui.tsx`: the sidebar block and the event listeners. One shared spinner timer that runs only while something works. Cleans up its timers and listeners on reload.
+- `tui.tsx`: the sidebar block and the event listeners. One 30 second clock for the times, since they count minutes, and one shared spinner timer that runs only while something works. Cleans up its timers and listeners on reload.
 - `index.ts`: an empty server part, so OpenCode loads the directory.
 - `agents-core.test.ts`: `bun test`.
 
