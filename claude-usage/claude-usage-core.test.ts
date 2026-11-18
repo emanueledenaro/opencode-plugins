@@ -962,6 +962,15 @@ describe("createResizeWatch", () => {
     watch.dispose()
     expect(row.listeners.size).toBe(0)
   })
+
+  test("follow after dispose adds nothing: a measure queued before cleanup cannot listen again", () => {
+    const row = fakeNode()
+    const watch = createResizeWatch(() => {})
+    watch.follow([row])
+    watch.dispose()
+    watch.follow([row])
+    expect(row.listeners.size).toBe(0)
+  })
 })
 
 describe("rowBudget", () => {

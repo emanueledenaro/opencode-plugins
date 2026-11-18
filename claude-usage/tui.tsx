@@ -154,17 +154,27 @@ export default Plugin.define({
       let box: Node | undefined
       // A resize of the row or of any item in it (the sidebar opens, a neighbour grows) re-measures,
       // after the layout pass, as onSizeChange below does.
-      const resizes = createResizeWatch(() => queueMicrotask(measure))
+      const resizes = createResizeWatch(() => queueMicrotask(followRowAndMeasure))
+      // Reads the row this item sits in and reports the columns the item may use. Reads only.
       const measure = () => {
         try {
           if (!box) return
           const items = box.parent?.getChildren?.() ?? []
-          resizes.follow([box.parent, ...items])
           const grower = items.find((kid) => kid !== box && (kid.getFlexGrow?.() ?? 0) > 0)
           tracker.report(rowBudget(box.width, grower?.width, PATH_RESERVE) ?? fallback())
         } catch {
           tracker.report(fallback())
         }
+      }
+      // Listens to resize on the row and on each item in it now (the host swaps items in and out), then
+      // measures. After cleanup the watch is disposed, so a call queued before it adds no listener.
+      const followRowAndMeasure = () => {
+        try {
+          if (box) resizes.follow([box.parent, ...(box.parent?.getChildren?.() ?? [])])
+        } catch {
+          // a node half built while the host rebuilds the row: the next resize follows it
+        }
+        measure()
       }
       const renderer = context.renderer as unknown as {
         on?: (event: string, listener: () => void) => unknown
@@ -176,7 +186,7 @@ export default Plugin.define({
         if (afterResize === undefined) {
           afterResize = setTimeout(() => {
             afterResize = undefined
-            measure()
+            followRowAndMeasure()
           }, LAYOUT_SETTLE_MS)
         }
       }
@@ -231,8 +241,8 @@ export default Plugin.define({
           backgroundColor={hovered() ? hoverFill() : undefined}
           ref={(el: Node) => {
             box = el
-            el.onSizeChange = () => queueMicrotask(measure)
-            queueMicrotask(measure)
+            el.onSizeChange = () => queueMicrotask(followRowAndMeasure)
+            queueMicrotask(followRowAndMeasure)
           }}
         >
           <Switch
