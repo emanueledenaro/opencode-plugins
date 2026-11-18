@@ -4,15 +4,24 @@ Small local plugins for OpenCode 2. Each folder is one plugin: point OpenCode at
 
 | Plugin | What it does |
 | --- | --- |
-| [claude-usage](claude-usage/) | Shows your Claude subscription usage (5-hour and weekly window) as coloured meters under the prompt, plus a `/claude-usage` dialog. Read only. |
-| [ask-box](ask-box/) | Keeps the assistant's last `Serve da te:` block visible in the sidebar until you answer. Read only. |
+| [claude-usage](claude-usage/) | Shows your Claude subscription usage (5-hour and weekly window) as coloured meters under the prompt, the week coloured by its pace, plus a `/claude-usage` dialog. Read only. |
+| [ask-box](ask-box/) | Keeps the assistant's last `Serve da te:` block visible in the sidebar until you answer, with how long it has waited. Read only. |
 | [plan-banner](plan-banner/) | Warns above the prompt when the assistant's last reply ran under the Plan agent. Read only. |
 | [quote](quote/) | Highlight text in the chat, press `ctrl+y`, and it is attached as a quote to your next message, with your comment underneath. Italian interface. |
-| [agents-panel](agents-panel/) | Sidebar list of the session's background subagents: title, state (running, finished, error, waiting for permission) and how long ago. Read only. |
+| [agents-panel](agents-panel/) | Sidebar list of the session's background subagents: who waits for you and since when, who works and on what, the last ones finished. Read only. |
 | [apple-theme](apple-theme/) | Not a plugin: a colour theme with the macOS system colours, dark and light, with a transparent background. |
-| [notify](notify/) | A notification and a short sound when the terminal is not focused and OpenCode finished a reply, stopped on an error, asks a permission or waits for an answer. At most one per 20 s in each window. |
+| [notify](notify/) | A notification and a short sound when the terminal is not focused and OpenCode finished a reply, stopped on an error, asks a permission or waits for an answer, with the name of the session it is about. At most one per 20 s in each window. |
 | [token-rate](token-rate/) | Shows the last reply's output speed (`42 tok/s`) beside the other footer items, and logs each measurement. |
 | [stato](stato/) | Fenced `stato` blocks in the chat get one theme colour per line, chosen by its first symbol: `✓` green, `✗` red, `≈` the warning colour (`◐` and `…` still work), `➜` the info colour. Reads only the block text. |
+
+## One look
+
+The interface text is Italian. What the plugins share:
+
+- Times are spans, never clock times, in one format: `<1m`, `12m`, `1h 5m`, `2g 3h`. With a word for what they measure: `12m` at work, `3m fa` finished, `da 2m` waiting for you, `si azzera tra 5g 2h`.
+- A colour has one meaning in each place. In the sidebar and above the prompt, orange (the theme's warning colour) is "waits for you": the `Ti aspetta` group, the `Serve da te` title, the Plan line; green is finished, red is failed. In the footer the same three are a scale: the usage meters go green, orange, red, and token-rate turns its number orange when a reply is slower than usual. Where a colour says a state, a word or a number says it too (`● rosso · ritmo 26% · 33 sopra`).
+- A sidebar block has a bold title in sentence case, like OpenCode's own blocks, with a short state on its right, and is not drawn when it has nothing to say.
+- A panel that cannot be drawn says `<name>: non disponibile` in the faint colour: `Subagenti: non disponibile`, `Serve da te: non disponibile`, `Citazioni: non disponibile`, `Avviso Plan: non disponibile`, `tok/s: non disponibile`, `Claude: uso non disponibile`.
 
 ## Install a plugin
 
@@ -30,7 +39,7 @@ OpenCode 2 loads only directories as plugins, and reloads only the files inside 
 
 ## OpenCode version
 
-Last checked on OpenCode 2.3.0 (2026-11-18). After each OpenCode upgrade, run:
+Last checked on OpenCode 2.3.2 (2026-11-18). After each OpenCode upgrade, run:
 
 ```sh
 bun check-host.ts   # or: bun check-host.ts /path/to/opencode
@@ -45,4 +54,4 @@ cd claude-usage && bun test   # same in agents-panel, ask-box, notify, plan-bann
 bun test ./check-host.test.ts ./copies.test.ts   # at the root
 ```
 
-OpenCode reloads only the files inside a plugin folder, so `createWidthTracker` is copied into five plugins and `createResizeWatch` into two. `copies.test.ts` fails when one copy differs from the others.
+OpenCode reloads only the files inside a plugin folder, so `createWidthTracker` is copied into five plugins, `createResizeWatch` into two and `relativeIt` (the time format) into three. `copies.test.ts` fails when one copy differs from the others, and when a plugin's "cannot be drawn" line leaves the shared wording or the faint colour.

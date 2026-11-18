@@ -25,6 +25,7 @@ OpenCode 2 reports a reply as events, which the plugin turns into the same input
 - The number turns to the warning colour when it is under 60% of the median of that model's last 20 earlier replies (from the log and from this run). It needs at least 5 earlier replies, otherwise there is nothing fair to compare with. This is the only accent.
 - While a reply streams, the sparkline becomes a small spinner of quadrant blocks (`▖ 126 tok/s`; SF Mono and Menlo have them, they have no braille) and the number is a live estimate, updated at most every 500 ms. The estimate counts about 4 characters per token, because real token counts only arrive when the reply ends. When it ends, the figure settles on the real one. The live number is never shown in the warning colour.
 - Nothing is shown before the first measurement.
+- If the item cannot be drawn it shows `tok/s: non disponibile` in the faint colour, the wording the other plugins use.
 
 OpenCode's own message footer also shows a `tok/s`. That one includes the wait for the first token, so it reads a little lower.
 

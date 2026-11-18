@@ -16,6 +16,8 @@ Plugin per OpenCode 2: selezioni del testo nel TUI, premi un tasto, scrivi un co
 
 Il commento è su una riga sola e al massimo di 2 000 caratteri.
 
+Se la scatola non può essere disegnata, al suo posto compare `Citazioni: non disponibile` in colore tenue, come negli altri plugin.
+
 ## Che cosa vede il modello
 
 Ogni allegato con commento contiene:

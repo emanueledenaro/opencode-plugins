@@ -63,7 +63,7 @@ export default Plugin.define({
     const unregister = context.ui.slot({
       append: "session.composer.top",
       render: (input: { sessionID: string }) => (
-        <ErrorBoundary fallback={<text fg={theme.text.faint}>{"Banner Plan: non disponibile"}</text>}>
+        <ErrorBoundary fallback={<text fg={theme.text.faint}>{"Avviso Plan: non disponibile"}</text>}>
           <Banner sessionID={input.sessionID} />
         </ErrorBoundary>
       ),

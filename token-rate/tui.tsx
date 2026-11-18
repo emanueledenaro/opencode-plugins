@@ -289,7 +289,7 @@ export default Plugin.define({
     const unregisterFooter = context.ui.slot({
       append: "prompt.footer.status",
       render: () => (
-        <ErrorBoundary fallback={<text fg={colour.faint} wrapMode="none">{"tok/s non disponibile"}</text>}>
+        <ErrorBoundary fallback={<text fg={colour.faint} wrapMode="none">{"tok/s: non disponibile"}</text>}>
           <Footer />
         </ErrorBoundary>
       ),
