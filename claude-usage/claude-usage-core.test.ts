@@ -480,6 +480,45 @@ describe("monitor", () => {
     h.monitor.subscribe(() => { throw new Error("ui") })
     expect(await h.monitor.refresh()).toBe("refreshed")
   })
+
+  test("a login the server refuses retries in 5 minutes, without the network back-off", async () => {
+    const h = harness({ fetchUsage: async () => ({ ok: false, failure: { kind: "login-expired", status: 401 } }) })
+    await h.monitor.refresh()
+    expect(h.monitor.state.nextAllowedAt - NOW).toBe(POLL_INTERVAL_MS)
+  })
+})
+
+describe("monitor: a 429 back-off is shared through the cache file", () => {
+  // One cache file for several monitors, as two OpenCode windows (or one before and after /reload) have.
+  const sharedCache = (): Pick<MonitorDeps, "loadCache" | "saveCache"> => {
+    let file: string | null = null
+    return {
+      loadCache: async () => (file === null ? null : parseCache(file)),
+      saveCache: async (state) => void (file = serializeCache(state)),
+    }
+  }
+  const rateLimited = async () =>
+    ({ ok: false, failure: { kind: "rate-limited", status: 429, retryAfterMs: 30 * 60_000 } }) as const
+
+  test("after /reload, /usage still waits for the back-off", async () => {
+    const cache = sharedCache()
+    await harness({ ...cache, fetchUsage: rateLimited }).monitor.refresh()
+    const reloaded = harness(cache)
+    reloaded.advance(60_000)
+    await reloaded.monitor.hydrate()
+    expect([await reloaded.monitor.refresh(true), reloaded.calls.fetch]).toEqual(["skipped", 0])
+  })
+
+  test("a window that is already open sees another window's 429 before its next poll", async () => {
+    const cache = sharedCache()
+    const open = harness(cache)
+    await open.monitor.refresh()
+    const other = harness({ ...cache, fetchUsage: rateLimited })
+    other.advance(60_000)
+    await other.monitor.refresh()
+    open.advance(POLL_INTERVAL_MS)
+    expect([await open.monitor.refresh(), open.calls.fetch]).toEqual(["skipped", 1])
+  })
 })
 
 describe("look", () => {

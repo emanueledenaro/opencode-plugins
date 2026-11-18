@@ -97,7 +97,7 @@ async function loadCache(): Promise<CacheFile | null> {
   }
 }
 
-// Only the usage numbers and the next-attempt time are written.
+// Only the usage numbers, the next-attempt time and, during a 429 back-off, its end are written.
 async function saveCache(state: Parameters<typeof serializeCache>[0]): Promise<void> {
   await mkdir(dirname(CACHE_PATH), { recursive: true })
   const temp = `${CACHE_PATH}.${process.pid}.tmp`
