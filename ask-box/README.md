@@ -6,6 +6,16 @@ A read-only OpenCode 2 plugin that shows in the sidebar what the assistant needs
 
 When the assistant's latest finished reply contains a line that starts with `Serve da te:` (optionally in bold, optionally followed by a numbered list), the sidebar shows a block titled `Serve da te` with that text: markdown removed, wrapped at the measured sidebar width, at most 8 lines in a normal sidebar and up to 12 in a very narrow one so the shown text stays about the same (a cut ends with `…`).
 
+```
+Serve da te               da 12m
+scegli se unire la PR #10 adesso
+o dopo la revisione
+```
+
+- The title is bold, in the "waits for you" colour. On its right, `da 12m` says how long the request has waited, counted from the moment that reply was finished, in the format of the other plugins (`da <1m`, `da 12m`, `da 1h 5m`, `da 2g 3h`). It moves twice a minute. When the time of the reply is not known, or the sidebar is too narrow for the title, a blank and the age, the age is left out.
+- One blank row separates the block from the one above, as between OpenCode's own sidebar blocks.
+- If the block cannot be drawn it shows `Serve da te: non disponibile` in the faint colour.
+
 The box shows only while that request is current:
 
 - It disappears as soon as you send a new message after that reply.
@@ -34,7 +44,7 @@ Run `/reload` in OpenCode. OpenCode 2.2 loads only directories as plugins and re
 
 ## What it reads
 
-Only `context.data.session.message.list(sessionID)` for the session on screen: your messages (to know when you answered) and the text parts of assistant messages. It writes nothing, sends nothing, makes no network request and no model call.
+Only `context.data.session.message.list(sessionID)` for the session on screen: your messages (to know when you answered), the text parts of assistant messages and the time a reply was completed. It writes nothing, sends nothing, makes no network request and no model call.
 
 ## Limits
 
@@ -44,9 +54,9 @@ Only `context.data.session.message.list(sessionID)` for the session on screen: y
 
 ## Files
 
-- `ask-box-core.ts`: pure logic (find the block, strip markdown, wrap, cap, decide whether to show).
+- `ask-box-core.ts`: pure logic (find the block, strip markdown, wrap, cap, decide whether to show, the age in the header).
 - `ask-box-core.test.ts`: `bun test`.
-- `tui.tsx`: the sidebar slot.
+- `tui.tsx`: the sidebar slot, and one 30 second clock for the age, cleared on reload.
 - `index.ts`: an empty server part, so OpenCode loads the directory.
 
 ## Turn it off
