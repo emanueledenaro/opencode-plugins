@@ -12,6 +12,8 @@ import {
   contentWidth,
   createLiveRate,
   createRateTracker,
+  createResizeWatch,
+  createShrinkHold,
   createWidthSettler,
   dedupeMeasurements,
   dialogSparkCells,
@@ -30,7 +32,7 @@ import {
   type LiveSample,
   type ThroughputMeasurement,
 } from "./token-rate-core.ts"
-import { appendMeasurement, readMeasurements } from "./token-rate-log.ts"
+import { createLogWriter, readMeasurements } from "./token-rate-log.ts"
 
 const KEPT_IN_MEMORY = 200
 const RESIZE_SETTLE_MS = 60
@@ -52,7 +54,8 @@ const layoutOf = (node: any): LayoutBox => ({
   children: (node.getChildren?.() ?? []).map(layoutOf),
 })
 
-// True for the footer item that holds the working-directory path (2.2.6 gives it this id).
+// True for the footer item that holds the working-directory path (OpenCode gives it this id; check-host.ts
+// at the repo root checks that the installed OpenCode still has it).
 const isPathItem = (node: any): boolean =>
   node?.id === PATH_ITEM_ID || (node?.getChildren?.() ?? []).some((child: any) => isPathItem(child))
 
@@ -82,6 +85,7 @@ export default Plugin.define({
     const tracker = createRateTracker()
     const liveRate = createLiveRate()
     const logging = process.env.TOKEN_RATE_LOG !== "off"
+    const log = createLogWriter()
     const [recent, setRecent] = createSignal<ThroughputMeasurement[]>([])
     const [seed, setSeed] = createSignal<ThroughputMeasurement[]>([])
     const [liveBySession, setLiveBySession] = createSignal<Record<string, LiveSample>>({})
@@ -94,7 +98,7 @@ export default Plugin.define({
       setRecent((current) => [...current, measurement].slice(-KEPT_IN_MEMORY))
       if (!logging) return
       // the log is a bonus; the footer still works without it
-      void appendMeasurement(measurement).catch(() => {})
+      void log.append(measurement).catch(() => {})
     }
 
     const dropLiveSample = (sessionID: string) =>
@@ -108,9 +112,14 @@ export default Plugin.define({
       dropLiveSample(sessionID)
     }
     // A whole execution ended (done, failed or interrupted): nothing of that session may stay "live".
-    const endSession = (sessionID: string) => {
+    const endLive = (sessionID: string) => {
       liveRate.endSession(sessionID)
       dropLiveSample(sessionID)
+    }
+    // A failed or interrupted run can leave a step that never ends; a finished one has ended all of its steps.
+    const endUnfinished = (sessionID: string) => {
+      tracker.endSession(sessionID)
+      endLive(sessionID)
     }
 
     type Event<T> = { data: T; created?: number }
@@ -155,10 +164,14 @@ export default Plugin.define({
         tracker.stepFailed({ sessionID, messageID: event.data.assistantMessageID })
         clearLive(sessionID, event.data.assistantMessageID)
       }),
-      ...["session.execution.succeeded", "session.execution.failed", "session.execution.interrupted"].map((name) =>
+      context.data.on("session.execution.succeeded", (event: Event<any>) => {
+        const sessionID = event.data?.sessionID
+        if (sessionID) endLive(sessionID)
+      }),
+      ...["session.execution.failed", "session.execution.interrupted"].map((name) =>
         context.data.on(name, (event: Event<any>) => {
           const sessionID = event.data?.sessionID
-          if (sessionID) endSession(sessionID)
+          if (sessionID) endUnfinished(sessionID)
         }),
       ),
     ]
@@ -184,8 +197,6 @@ export default Plugin.define({
 
     const Footer = () => {
       let box: any
-      const watched = new Set<any>()
-      const detach: (() => void)[] = []
       const settler = createWidthSettler({
         delayMs: RESIZE_SETTLE_MS,
         schedule: (fn, ms) => setTimeout(fn, ms),
@@ -202,14 +213,15 @@ export default Plugin.define({
         const row = box?.parent
         if (!row || typeof row.getChildren !== "function") return
         const items: any[] = row.getChildren()
-        for (const node of [row, ...items]) watch(node)
+        resizes.follow([row, ...items])
         const siblings = items.filter((item) => item !== box)
         // The first item is stretched to fill the row. Idle it holds the working-directory path, which
         // truncates itself, so it may give up cells. While a reply streams it holds OpenCode's
         // "esc interrupt" hint: that must never be cut, so it keeps all of its content.
         const first = siblings[0]
         const isPath = first !== undefined && isPathItem(first)
-        if (isPath) absorbShrink(first)
+        if (isPath) pathShrink.hold(first)
+        else pathShrink.release()
         settler.observe(
           footerRoom({
             rowWidth: row.width,
@@ -221,24 +233,12 @@ export default Plugin.define({
       }
       // When the row is too full, flexbox takes cells from every item in proportion to its size, so
       // claude-usage would lose a meter cell. The path already truncates itself, so it is told to take
-      // the whole cut. Put back on cleanup.
-      let pathBox: any
-      let pathShrink: unknown
-      const absorbShrink = (node: any) => {
-        try {
-          if (!node || node === pathBox || node === box || !("flexShrink" in node)) return
-          pathBox = node
-          pathShrink = node.flexShrink
-          node.flexShrink = PATH_SHRINK
-        } catch {}
-      }
-      // A resize of the row or of any item in it re-measures; an unchanged result does no work.
-      const watch = (node: any) => {
-        if (!node || watched.has(node) || typeof node.on !== "function") return
-        watched.add(node)
-        node.on("resize", measure)
-        detach.push(() => node.off?.("resize", measure))
-      }
+      // the whole cut. The same box holds the interrupt hint while a reply streams: then, and on cleanup,
+      // its own value is put back.
+      const pathShrink = createShrinkHold(PATH_SHRINK)
+      // A resize of the row or of any item in it re-measures; an unchanged result does no work. Nodes the
+      // host swaps out of the row are let go.
+      const resizes = createResizeWatch(measure)
       const first = setTimeout(measure, 0)
       // The first item of the row changes when a reply starts or ends (path <-> interrupt hint): look again.
       let again: ReturnType<typeof setTimeout> | undefined
@@ -257,11 +257,8 @@ export default Plugin.define({
         clearTimeout(first)
         clearTimeout(again)
         settler.dispose()
-        detach.forEach((stop) => stop())
-        watched.clear()
-        try {
-          if (pathBox && !pathBox.isDestroyed) pathBox.flexShrink = pathShrink ?? 1
-        } catch {}
+        resizes.dispose()
+        pathShrink.release()
       })
 
       const fit = createMemo(() => fitFooter(view(), room() ?? 0))
@@ -269,7 +266,7 @@ export default Plugin.define({
         <box
           ref={(node: any) => {
             box = node
-            watch(node)
+            resizes.follow([node])
           }}
           flexDirection="row"
           flexShrink={0}

@@ -40,6 +40,22 @@ export async function appendMeasurement(
   }
 }
 
+/**
+ * Appends one measurement at a time, in the order asked. Two steps that end together could otherwise both see
+ * a log over the limit: one line lost, or the new small file renamed over `<file>.1`. A failed append is
+ * reported to its caller and does not stop the next one.
+ */
+export function createLogWriter(file = logPath(), rotateAt = ROTATE_BYTES) {
+  let last: Promise<void> = Promise.resolve()
+  return {
+    append(measurement: ThroughputMeasurement): Promise<void> {
+      const next = last.then(() => appendMeasurement(measurement, file, rotateAt))
+      last = next.catch(() => {})
+      return next
+    },
+  }
+}
+
 async function rotateIfBig(file: string, rotateAt: number): Promise<void> {
   const info = await lstat(file).catch(() => undefined)
   if (!info?.isFile() || info.size <= rotateAt) return
