@@ -151,14 +151,53 @@ export const STATE_HUES: readonly string[] = ["orange", "green", "red"]
 
 /**
  * One fixed theme hue per model family, so a model has the same colour in every theme; `slot` is the place
- * in the theme's categorical palette used when it has no such hue. Never a hue of STATE_HUES.
+ * in the theme's categorical palette used when it has no such hue. Never a hue of STATE_HUES. Yellow has
+ * no slot: see modelColour.
  */
-export const MODEL_HUES: Record<ModelKey, { hue: string; slot: number } | undefined> = {
+export const MODEL_HUES: Record<ModelKey, { hue: string; slot?: number } | undefined> = {
   opus: { hue: "blue", slot: 0 },
   sonnet: { hue: "cyan", slot: 1 },
-  haiku: { hue: "yellow", slot: 3 },
+  haiku: { hue: "yellow" },
   fable: { hue: "purple", slot: 1 },
   other: undefined,
+}
+
+/** The yellow drawn when the theme has no yellow hue: the apple theme's own, on a dark and on a light background. */
+export const CAUTION_YELLOW = { dark: "#ffd60a", light: "#a05a00" } as const
+
+/**
+ * The yellow of a caution: the middle of a scale, a slow reply, a label. OpenCode builds a theme's hues from
+ * its state colours (accent, primary, secondary, success, warning, error, info), so `hue.yellow` exists only
+ * when one of them is yellow. The apple theme has none: its warning colour is orange and means "waits for
+ * you". There the yellow is CAUTION_YELLOW, picked by the text colour, since a theme's background can be
+ * transparent: light text is drawn on a dark background.
+ */
+export function cautionYellow(theme: { hue?: Record<string, Record<number, unknown> | undefined>; text?: { base?: unknown } }): unknown {
+  const own = theme.hue?.yellow?.[200]
+  if (own !== undefined && own !== null) return own
+  const { r, g, b } = (theme.text?.base ?? {}) as { r?: unknown; g?: unknown; b?: unknown }
+  const known = typeof r === "number" && typeof g === "number" && typeof b === "number"
+  const lightText = !known || 0.299 * r + 0.587 * g + 0.114 * b >= 0.5
+  return lightText ? CAUTION_YELLOW.dark : CAUTION_YELLOW.light
+}
+
+/** The parts of the host theme a model colour is read from. */
+export type ModelTheme = {
+  hue?: Record<string, Record<number, unknown> | undefined>
+  categorical?: (Record<number, unknown> | undefined)[]
+  text: { base: unknown }
+}
+
+/**
+ * The colour of a model label. Haiku is yellow, and the apple theme has no yellow hue: the fourth place of
+ * its categorical palette is its warning orange, the colour of "Ti aspetta", so yellow never comes from there.
+ */
+export function modelColour(key: ModelKey, theme: ModelTheme): unknown {
+  const pick = MODEL_HUES[key]
+  if (!pick) return theme.text.base
+  if (pick.hue === "yellow") return cautionYellow(theme)
+  const slot = pick.slot === undefined ? undefined : theme.categorical?.[pick.slot]?.[200]
+  return theme.hue?.[pick.hue]?.[200] ?? slot ?? theme.text.base
 }
 
 const DEFAULT_TITLE = /^(Child|New) session - /

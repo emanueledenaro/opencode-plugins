@@ -52,6 +52,8 @@ import {
   OLD_READING_MS,
   formatPercent,
   inReserve,
+  CAUTION_YELLOW,
+  cautionYellow,
   levelColour,
   readingPaceFit,
   readingPaceIt,
@@ -582,26 +584,46 @@ describe("look", () => {
     expect([formatPercent(89.5), usageLevel(89.5)]).toEqual(["90%", "high"])
     expect([shownPercent(59.4), shownPercent(59.5), shownPercent(59.6)]).toEqual([59, 60, 60])
   })
-  test("the word beside the dot names the colour that is drawn: giallo is the theme's yellow hue", () => {
-    expect(LEVEL_COLOURS.warn).toEqual({ word: "giallo", hue: "yellow", feedback: "warning" })
-    expect(LEVEL_COLOURS.ok).toEqual({ word: "verde", feedback: "success" })
-    expect(LEVEL_COLOURS.high).toEqual({ word: "rosso", feedback: "error" })
+  // The apple theme as OpenCode 2.3.2 gives it to a plugin, read from a running TUI: a hue exists only for
+  // a colour one of the theme's state tokens has, so there is no hue.yellow and hue.orange is the warning colour.
+  const rgb = (r: number, g: number, b: number) => ({ r: r / 255, g: g / 255, b: b / 255 })
+  const ORANGE = rgb(255, 159, 10)
+  const apple = (text = rgb(240, 237, 230)): LevelTheme => ({
+    hue: { orange: { 200: ORANGE }, green: { 200: "green" }, red: { 200: "red" } },
+    text: { base: text, feedback: { success: { base: "green" }, warning: { base: ORANGE }, error: { base: "red" } } },
   })
-  test("levelColour: yellow is never the theme's warning colour, which means 'waits for you'", () => {
-    const apple: LevelTheme = {
-      hue: { yellow: { 200: "#ffd60a" }, orange: { 200: "#ff9f0a" } },
-      text: { base: "#fff", feedback: { success: { base: "#30d158" }, warning: { base: "#ff9f0a" }, error: { base: "#ff453a" } } },
-    }
-    expect(levelColour("warn", apple)).toBe("#ffd60a")
-    expect(levelColour("warn", apple)).not.toBe(apple.text.feedback?.warning?.base)
-    expect(levelColour("ok", apple)).toBe("#30d158")
-    expect(levelColour("high", apple)).toBe("#ff453a")
+  test("the word beside the dot names the colour that is drawn, and no level takes the warning colour", () => {
+    expect(LEVEL_COLOURS).toEqual({
+      ok: { word: "verde", feedback: "success" },
+      warn: { word: "giallo" },
+      high: { word: "rosso", feedback: "error" },
+    })
   })
-  test("levelColour: a theme with no yellow hue falls back to its warning colour, then to plain text", () => {
-    const noHue: LevelTheme = { text: { base: "#fff", feedback: { warning: { base: "#ff9f0a" } } } }
-    expect(levelColour("warn", noHue)).toBe("#ff9f0a")
-    expect(levelColour("warn", { hue: { yellow: {} }, text: { base: "#fff" } })).toBe("#fff")
-    expect(levelColour("ok", noHue)).toBe("#fff")
+  test("levelColour: giallo is yellow in the apple theme, never its warning orange, which means 'waits for you'", () => {
+    expect(levelColour("warn", apple())).toBe("#ffd60a")
+    expect(levelColour("warn", apple())).not.toBe(ORANGE)
+    expect(levelColour("ok", apple())).toBe("green")
+    expect(levelColour("high", apple())).toBe("red")
+  })
+  test("levelColour: a theme with no feedback colours draws green and red as plain text, yellow still yellow", () => {
+    const bare: LevelTheme = { text: { base: "text" } }
+    expect([levelColour("ok", bare), levelColour("warn", bare), levelColour("high", bare)]).toEqual(["text", "#ffd60a", "text"])
+  })
+  test("cautionYellow: the apple theme's yellow for a dark background, its darker one under dark text", () => {
+    expect(CAUTION_YELLOW).toEqual({ dark: "#ffd60a", light: "#a05a00" })
+    expect(cautionYellow(apple())).toBe("#ffd60a")
+    expect(cautionYellow(apple(rgb(29, 29, 31)))).toBe("#a05a00") // the text of the apple theme's light mode
+    expect(cautionYellow(apple(rgb(128, 128, 128)))).toBe("#ffd60a")
+    expect(cautionYellow(apple(rgb(127, 127, 127)))).toBe("#a05a00")
+    // Green weighs most in how light a colour looks: pure green text is light, pure blue text is dark.
+    expect([cautionYellow(apple(rgb(0, 255, 0))), cautionYellow(apple(rgb(0, 0, 255)))]).toEqual(["#ffd60a", "#a05a00"])
+  })
+  test("cautionYellow: a theme that has a yellow hue gives its own; an unreadable text colour counts as light", () => {
+    expect(cautionYellow({ hue: { yellow: { 200: "own" } }, text: { base: rgb(29, 29, 31) } })).toBe("own")
+    expect(cautionYellow({ hue: { yellow: {} }, text: { base: rgb(29, 29, 31) } })).toBe("#a05a00")
+    expect(cautionYellow({ text: { base: "#1d1d1f" } })).toBe("#ffd60a")
+    expect(cautionYellow({ text: { base: { r: 0, g: 0 } } })).toBe("#ffd60a")
+    expect(cautionYellow({})).toBe("#ffd60a")
   })
   test("meter", () => {
     expect(meter(0, 10)).toEqual({ filled: "", empty: "▱".repeat(10) })

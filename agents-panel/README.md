@@ -33,7 +33,7 @@ Subagenti             1 ti aspetta
 - At most 10 rows. Waiting and running agents come first and are never hidden by finished ones; if they alone are more than 10, a line `+N altri` counts the rest.
 - Click a row to open that child session.
 - The text adapts to the measured sidebar width, also after a resize: below 24 columns the model column goes (the name takes the model colour), below 14 the time goes too. Lines are always cut with `…`, never wrapped.
-- Colours come from the active theme, one meaning each: orange waits for you, green finished, red failed. A model has a fixed hue of its own (Opus blue, Sonnet cyan, Haiku yellow, Fable purple), never one of those three. If the panel cannot be drawn it shows `Subagenti: non disponibile` in the faint colour.
+- Colours come from the active theme, one meaning each: orange waits for you, green finished, red failed. A model has a fixed hue of its own (Opus blue, Sonnet cyan, Haiku yellow, Fable purple), never one of those three. The apple theme has no yellow hue (OpenCode builds a theme's hues from its seven state colours, and in the apple theme none of them is yellow, so there is no yellow hue to read), so Haiku is drawn in the apple theme's own yellow, `#ffd60a` under light text and `#a05a00` under dark text; before, it fell on the theme's fourth palette colour, which is the orange of `Ti aspetta`. One overlap is left in the apple theme: its accent is blue, so the `Al lavoro` title and the Opus label are the same blue. If the panel cannot be drawn it shows `Subagenti: non disponibile` in the faint colour.
 
 ## Install
 

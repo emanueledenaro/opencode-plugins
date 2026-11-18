@@ -9,6 +9,7 @@ import { ErrorBoundary, For, Show, createEffect, createMemo, createSignal, on, o
 import {
   buildFooterView,
   buildSpeedDialog,
+  cautionYellow,
   contentWidth,
   createLiveRate,
   createRateTracker,
@@ -76,10 +77,10 @@ export default Plugin.define({
       get faint() {
         return pick(theme.text?.faint) ?? pick(theme.text?.muted) ?? pick(theme.text?.base)
       },
-      // The one accent: "slower than this model usually is". The theme's yellow hue, as claude-usage draws
-      // the middle of its scale beside it; the warning colour (orange) means "waits for you" in these plugins.
+      // The one accent: "slower than this model usually is". Yellow, as claude-usage draws the middle of
+      // its scale beside it; the theme's warning colour (orange) means "waits for you" in these plugins.
       get slow() {
-        return pick(theme.hue?.yellow?.[200]) ?? pick(theme.text?.feedback?.warning) ?? pick(theme.text?.base)
+        return cautionYellow(theme)
       },
     }
 

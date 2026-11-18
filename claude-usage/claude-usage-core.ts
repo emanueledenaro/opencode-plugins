@@ -460,13 +460,13 @@ export function createUsageMonitor(deps: MonitorDeps) {
 export type Level = "ok" | "warn" | "high"
 
 /**
- * Where the tui takes the colour of each level, and the word that names it beside the dot. "warn" is the
- * theme's yellow hue, as its word says. The theme's warning colour is orange in the apple theme and means
- * "waits for you" (the login line), so here it is only the fallback of a theme that has no hues.
+ * The word that names each level beside the dot, and the theme's feedback colour it is drawn in. "warn"
+ * has none: it is yellow, as its word says (cautionYellow). The theme's warning colour is orange in the
+ * apple theme and means "waits for you" (the login line), so no level is ever drawn in it.
  */
-export const LEVEL_COLOURS: Record<Level, { word: string; hue?: "yellow"; feedback: "success" | "warning" | "error" }> = {
+export const LEVEL_COLOURS: Record<Level, { word: string; feedback?: "success" | "error" }> = {
   ok: { word: "verde", feedback: "success" },
-  warn: { word: "giallo", hue: "yellow", feedback: "warning" },
+  warn: { word: "giallo" },
   high: { word: "rosso", feedback: "error" },
 }
 
@@ -476,11 +476,30 @@ export type LevelTheme = {
   text: { base: unknown; feedback?: Partial<Record<"success" | "warning" | "error", { base?: unknown } | undefined>> }
 }
 
-/** The colour a level is drawn in: its named hue if the theme has one, else its feedback colour, else plain text. */
+/** The yellow drawn when the theme has no yellow hue: the apple theme's own, on a dark and on a light background. */
+export const CAUTION_YELLOW = { dark: "#ffd60a", light: "#a05a00" } as const
+
+/**
+ * The yellow of a caution: the middle of a scale, a slow reply, a label. OpenCode builds a theme's hues from
+ * its state colours (accent, primary, secondary, success, warning, error, info), so `hue.yellow` exists only
+ * when one of them is yellow. The apple theme has none: its warning colour is orange and means "waits for
+ * you". There the yellow is CAUTION_YELLOW, picked by the text colour, since a theme's background can be
+ * transparent: light text is drawn on a dark background.
+ */
+export function cautionYellow(theme: { hue?: Record<string, Record<number, unknown> | undefined>; text?: { base?: unknown } }): unknown {
+  const own = theme.hue?.yellow?.[200]
+  if (own !== undefined && own !== null) return own
+  const { r, g, b } = (theme.text?.base ?? {}) as { r?: unknown; g?: unknown; b?: unknown }
+  const known = typeof r === "number" && typeof g === "number" && typeof b === "number"
+  const lightText = !known || 0.299 * r + 0.587 * g + 0.114 * b >= 0.5
+  return lightText ? CAUTION_YELLOW.dark : CAUTION_YELLOW.light
+}
+
+/** The colour a level is drawn in: yellow for "warn", else its feedback colour, else plain text. */
 export function levelColour(level: Level, theme: LevelTheme): unknown {
-  const look = LEVEL_COLOURS[level]
-  const hue = look.hue === undefined ? undefined : theme.hue?.[look.hue]?.[200]
-  return hue ?? theme.text.feedback?.[look.feedback]?.base ?? theme.text.base
+  const feedback = LEVEL_COLOURS[level].feedback
+  if (feedback === undefined) return cautionYellow(theme)
+  return theme.text.feedback?.[feedback]?.base ?? theme.text.base
 }
 
 // By the percent alone: green under 70%, yellow from 70%, red from the reserve line. The 5-hour window

@@ -35,6 +35,11 @@ describe("copied helpers stay identical", () => {
     expectSameCopies("createResizeWatch", ["token-rate/token-rate-core.ts", "claude-usage/claude-usage-core.ts"])
   })
 
+  // One yellow for a caution, in every panel that draws one.
+  test("cautionYellow", () => {
+    expectSameCopies("cautionYellow", ["claude-usage/claude-usage-core.ts", "token-rate/token-rate-core.ts", "agents-panel/agents-core.ts"])
+  })
+
   // One time format in every panel: "<1m", "12m", "1h 5m", "2g 3h".
   test("relativeIt", () => {
     expectSameCopies("relativeIt", ["agents-panel/agents-core.ts", "claude-usage/claude-usage-core.ts", "ask-box/ask-box-core.ts"])
@@ -86,10 +91,10 @@ const codeLines = (file: string): string[] =>
     .filter((line) => line !== "" && !line.startsWith("//") && !line.startsWith("*") && !line.startsWith("/*"))
 
 describe("the theme's warning colour means one thing: it waits for you", () => {
-  // In the owner's theme the warning colour is orange. A caution level (the middle of a scale, a slow
-  // reply) is the theme's yellow hue, with the warning colour only as the fallback of a theme without hues.
-  // The number is how many lines of each tui file read the warning colour directly, and what for.
-  const direct: Record<string, number> = {
+  // In the owner's theme the warning colour is orange. A caution (the middle of a scale, a slow reply) is
+  // yellow and never reads the warning colour. The number is how many lines of each tui file read it, and
+  // what for.
+  const reads: Record<string, number> = {
     "agents-panel/tui.tsx": 1, // groupColour("waiting"): the "Ti aspetta" group and "1 ti aspetta" in the header
     "ask-box/tui.tsx": 1, // the "Serve da te" title
     "plan-banner/tui.tsx": 1, // the Plan line: your next message runs under Plan until you switch
@@ -98,22 +103,33 @@ describe("the theme's warning colour means one thing: it waits for you", () => {
     "quote/tui.tsx": 0,
     "notify/tui.tsx": 0,
   }
+  const yellowCores = ["claude-usage/claude-usage-core.ts", "token-rate/token-rate-core.ts", "agents-panel/agents-core.ts"]
 
   test("no tui file draws it for anything else", () => {
     const found = Object.fromEntries(
-      Object.keys(direct).map((file) => [
-        file,
-        codeLines(file).filter((line) => /feedback\??\.warning/.test(line) && !/\bhue\b/.test(line)).length,
-      ]),
+      Object.keys(reads).map((file) => [file, codeLines(file).filter((line) => /feedback\??\.warning/.test(line)).length]),
     )
-    expect(found).toEqual(direct)
+    expect(found).toEqual(reads)
   })
 
-  test("a caution level takes the yellow hue first", () => {
-    const tokenRate = codeLines("token-rate/tui.tsx").filter((line) => /feedback\??\.warning/.test(line))
-    expect(tokenRate).toEqual(["return pick(theme.hue?.yellow?.[200]) ?? pick(theme.text?.feedback?.warning) ?? pick(theme.text?.base)"])
-    expect(functionText("claude-usage/claude-usage-core.ts", "levelColour")).toContain("theme.hue?.[look.hue]?.[200]")
+  test("a caution is yellow: the usage levels, a slow reply and the Haiku label take cautionYellow", () => {
     expect(codeLines("claude-usage/tui.tsx")).toContain("const colour = (level: Level) => levelColour(level, theme as unknown as LevelTheme)")
+    expect(functionText("claude-usage/claude-usage-core.ts", "levelColour")).toContain("return cautionYellow(theme)")
+    expect(functionText("agents-panel/agents-core.ts", "modelColour")).toContain("return cautionYellow(theme)")
+    const tokenRate = codeLines("token-rate/tui.tsx")
+    expect(tokenRate.slice(tokenRate.indexOf("get slow() {"), tokenRate.indexOf("get slow() {") + 2)).toEqual(["get slow() {", "return cautionYellow(theme)"])
+    for (const file of yellowCores) {
+      expect({ file, warning: functionText(file, "cautionYellow")?.includes("warning") }).toEqual({ file, warning: false })
+    }
+  })
+
+  // OpenCode gives the apple theme no yellow hue (none of its state colours is yellow), so the plugins
+  // carry its yellow themselves. It stays the theme's own: `yellow` in dark mode, `lyellow` in light mode.
+  test("the yellow is the apple theme's own, the same in every copy", () => {
+    const { defs } = JSON.parse(readFileSync(join(import.meta.dir, "apple-theme/apple.json"), "utf8")) as { defs: Record<string, string> }
+    const line = `export const CAUTION_YELLOW = { dark: "${defs.yellow}", light: "${defs.lyellow}" } as const`
+    expect(line).toBe('export const CAUTION_YELLOW = { dark: "#ffd60a", light: "#a05a00" } as const')
+    for (const file of yellowCores) expect({ file, has: codeLines(file).includes(line) }).toEqual({ file, has: true })
   })
 })
 

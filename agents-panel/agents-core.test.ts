@@ -12,6 +12,7 @@ import {
   createWidthTracker,
   displayTitle,
   fit,
+  modelColour,
   headerState,
   oneLine,
   relativeIt,
@@ -22,6 +23,7 @@ import {
   toolDetail,
   type ChildInput,
   type View,
+  type ModelTheme,
 } from "./agents-core"
 
 const NOW = 1_000_000_000
@@ -197,6 +199,25 @@ describe("model colours", () => {
     expect(MODEL_HUES.haiku?.hue).toBe("yellow")
     expect(MODEL_HUES.fable?.hue).toBe("purple")
     expect(MODEL_HUES.other).toBeUndefined()
+  })
+  // The apple theme as OpenCode 2.3.2 gives it to a plugin, read from a running TUI: it has no hue.yellow,
+  // and the fourth colour of its categorical palette is its warning orange.
+  const apple: ModelTheme = {
+    hue: { orange: { 200: "orange" }, cyan: { 200: "cyan" }, blue: { 200: "blue" }, purple: { 200: "purple" } },
+    categorical: [{ 200: "purple" }, { 200: "blue" }, { 200: "green" }, { 200: "orange" }, { 200: "red" }, { 200: "cyan" }],
+    text: { base: { r: 240 / 255, g: 237 / 255, b: 230 / 255 } },
+  }
+  test("Haiku is yellow in the apple theme, never the orange of 'Ti aspetta'", () => {
+    expect(modelColour("haiku", apple)).toBe("#ffd60a")
+    expect(modelColour("haiku", { ...apple, text: { base: { r: 0.11, g: 0.11, b: 0.12 } } })).toBe("#a05a00")
+    expect(modelColour("haiku", { ...apple, hue: { yellow: { 200: "own" } } })).toBe("own")
+  })
+  test("the other families take their hue, then their place in the categorical palette, then plain text", () => {
+    expect([modelColour("opus", apple), modelColour("sonnet", apple), modelColour("fable", apple)]).toEqual(["blue", "cyan", "purple"])
+    expect(modelColour("other", apple)).toBe(apple.text.base)
+    const noHues: ModelTheme = { categorical: [{ 200: "first" }, { 200: "second" }], text: { base: "text" } }
+    expect([modelColour("opus", noHues), modelColour("sonnet", noHues), modelColour("haiku", noHues)]).toEqual(["first", "second", "#ffd60a"])
+    expect(modelColour("opus", { text: { base: "text" } })).toBe("text")
   })
 })
 

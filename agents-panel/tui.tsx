@@ -7,17 +7,18 @@ import { Plugin } from "@opencode/plugin/tui"
 import { ErrorBoundary, For, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import {
   DEFAULT_WIDTH,
-  MODEL_HUES,
   buildView,
   createRefreshBatch,
   createRunTracker,
   createWidthTracker,
+  modelColour,
   rowLayout,
   spinnerFrame,
   toolDetail,
   type ChildInput,
   type GroupKind,
   type ModelKey,
+  type ModelTheme,
 } from "./agents-core.ts"
 
 // The times count minutes, so the clock moves twice a minute; a faster one only rebuilds the rows.
@@ -203,11 +204,7 @@ export default Plugin.define({
       return theme.text.feedback.success?.base ?? theme.text.muted
     }
     // One fixed hue per model family (MODEL_HUES), never a hue that means a state in this panel.
-    const modelColour = (key: ModelKey) => {
-      const pick = MODEL_HUES[key]
-      if (!pick) return theme.text.base
-      return palette().hue?.[pick.hue]?.[200] ?? palette().categorical?.[pick.slot]?.[200] ?? theme.text.base
-    }
+    const labelColour = (key: ModelKey) => modelColour(key, theme as unknown as ModelTheme)
 
     const Panel = (props: { sessionID: string }) => {
       // The sidebar can be any width, so the panel measures itself; a burst of resizes is one update.
@@ -277,7 +274,7 @@ export default Plugin.define({
                           </Show>
                           <Show when={row.lead !== ""}>
                             <text
-                              fg={modelColour(row.modelKey)}
+                              fg={labelColour(row.modelKey)}
                               attributes={group.kind === "done" ? DIM : 0}
                               wrapMode="none"
                             >
@@ -285,7 +282,7 @@ export default Plugin.define({
                             </text>
                           </Show>
                           <text
-                            fg={showModel() ? theme.text.base : modelColour(row.modelKey)}
+                            fg={showModel() ? theme.text.base : labelColour(row.modelKey)}
                             attributes={group.kind === "done" ? DIM : 0}
                             wrapMode="none"
                           >
