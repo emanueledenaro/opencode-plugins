@@ -178,6 +178,9 @@ describe("normalizeComment", () => {
   test("never splits a surrogate pair at the cut", () => {
     expect(normalizeComment("c".repeat(1999) + "😀" + "x")).toBe("c".repeat(1999))
   })
+  test("drops the space the cut leaves at the end", () => {
+    expect(normalizeComment("parola ".repeat(285) + "abcd e altro")).toBe("parola ".repeat(285) + "abcd")
+  })
 })
 
 describe("capQuotes (one budget shared by all quotes and comments)", () => {
@@ -245,6 +248,10 @@ describe("capQuotes (one budget shared by all quotes and comments)", () => {
   test("never splits a surrogate pair when cutting a comment", () => {
     const result = capQuotes([Q("a".repeat(19_997)), Q("x", "😀😀")])
     expect(result.quotes[1]).toEqual(Q("x", "😀"))
+  })
+  test("a comment cut by the budget right after a space loses the space", () => {
+    const result = capQuotes([Q("a".repeat(19_995)), Q("abc", "ciao come stai")])
+    expect(result.quotes[1]).toEqual(Q(`a\n\n${NOTE}`, "ciao"))
   })
   test("applying it twice changes nothing, comments included", () => {
     const once = capQuotes([Q("a".repeat(19_000), "c".repeat(2_000)), Q("b", "d"), Q("e", "f")])
@@ -916,6 +923,27 @@ describe("strict comment on read", () => {
   test("an over-long text is refused", () => {
     const raw = JSON.stringify({ v: 3, quotes: [{ text: "x".repeat(MAX_QUOTE_CHARS + 100), comment: "" }], createdAt: NOW })
     expect(parsePending(raw, NOW).status).toBe("invalid")
+  })
+})
+
+describe("a comment cut right after a space keeps every pending quote", () => {
+  const attachedAfter = (fs: PendingFs): number => {
+    const prompt: { text: string; files?: unknown[] } = { text: "messaggio" }
+    applyQuoteToPrompt({ sessionID: SID, prompt }, fs, NOW + 2000)
+    return prompt.files?.length ?? 0
+  }
+
+  test("a comment cut at its maximum: both quotes reach the prompt", () => {
+    const fs = fakeFs()
+    addPending(SID, "primo pezzo", "", fs, NOW)
+    expect(addPending(SID, "secondo pezzo", "parola ".repeat(285) + "abcd e altro", fs, NOW + 1000).status).toBe("added")
+    expect(attachedAfter(fs)).toBe(2)
+  })
+  test("a comment cut by the shared budget: both quotes reach the prompt", () => {
+    const fs = fakeFs()
+    addPending(SID, "a".repeat(19_995), "", fs, NOW)
+    expect(addPending(SID, "abc", "ciao come stai", fs, NOW + 1000).status).toBe("added")
+    expect(attachedAfter(fs)).toBe(2)
   })
 })
 

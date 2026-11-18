@@ -257,7 +257,8 @@ export function nextDelay(consecutiveFailures: number, retryAfterMs?: number): n
 
 // --- cache (numbers only) --------------------------------------------------------------------
 
-export type CacheFile = { version: 1; snapshot: UsageSnapshot | null; nextAllowedAt: number }
+// `rateLimitedUntil` is there only during a 429 back-off, so a reloaded or second window keeps to it.
+export type CacheFile = { version: 1; snapshot: UsageSnapshot | null; nextAllowedAt: number; rateLimitedUntil?: number }
 
 function validWindow(raw: unknown): UsageWindow | null {
   if (typeof raw !== "object" || raw === null) return null
@@ -267,17 +268,21 @@ function validWindow(raw: unknown): UsageWindow | null {
   return { percent, resetsAt: resetsAt as number | null }
 }
 
-export function serializeCache(state: Pick<MonitorState, "snapshot" | "nextAllowedAt">): string {
+export function serializeCache(
+  state: Pick<MonitorState, "snapshot" | "nextAllowedAt"> & { failure?: Failure | null },
+): string {
   const file: CacheFile = { version: 1, snapshot: state.snapshot, nextAllowedAt: state.nextAllowedAt }
+  if (state.failure?.kind === "rate-limited") file.rateLimitedUntil = state.nextAllowedAt
   return JSON.stringify(file)
 }
 
 export function parseCache(text: string): CacheFile | null {
   try {
-    const raw = JSON.parse(text) as { version?: unknown; snapshot?: unknown; nextAllowedAt?: unknown }
+    const raw = JSON.parse(text) as { version?: unknown; snapshot?: unknown; nextAllowedAt?: unknown; rateLimitedUntil?: unknown }
     if (raw.version !== 1) return null
     const nextAllowedAt = typeof raw.nextAllowedAt === "number" ? raw.nextAllowedAt : 0
-    if (raw.snapshot === null) return { version: 1, snapshot: null, nextAllowedAt }
+    const backOff = typeof raw.rateLimitedUntil === "number" ? { rateLimitedUntil: raw.rateLimitedUntil } : {}
+    if (raw.snapshot === null) return { version: 1, snapshot: null, nextAllowedAt, ...backOff }
     const snap = raw.snapshot as { fetchedAt?: unknown; fiveHour?: unknown; sevenDay?: unknown; fable?: unknown }
     if (typeof snap?.fetchedAt !== "number") return null
     return {
@@ -289,6 +294,7 @@ export function parseCache(text: string): CacheFile | null {
         fable: validWindow(snap.fable), // old cache files have no fable field: null
       },
       nextAllowedAt,
+      ...backOff,
     }
   } catch {
     return null
@@ -344,18 +350,45 @@ export function createUsageMonitor(deps: MonitorDeps) {
     return "failed"
   }
 
+  // A missing or expired login (seen locally or refused by the server) is not a network failure: retry at
+  // the normal interval, no back-off, so the footer recovers within 5 minutes after Claude Code logs in again.
+  const retryAfterLogin = (failure: Failure): RefreshOutcome => {
+    publish({ ...state, failure, nextAllowedAt: deps.now() + POLL_INTERVAL_MS })
+    return "failed"
+  }
+
+  // The later of our next attempt and a time read from the cache, which may not push it past the max back-off.
+  const laterAllowedAt = (cachedAt: number): number =>
+    Math.max(state.nextAllowedAt, Math.min(cachedAt, deps.now() + MAX_BACKOFF_MS))
+
+  // Another window, or this one before a /reload, may have hit a 429: the cache file says until when.
+  const adoptSharedRateLimit = async (): Promise<void> => {
+    try {
+      const until = (await deps.loadCache())?.rateLimitedUntil ?? 0
+      if (until <= deps.now()) return
+      publish({ ...state, failure: { kind: "rate-limited", status: 429 }, nextAllowedAt: laterAllowedAt(until) })
+    } catch {
+      // no cache, no shared back-off
+    }
+  }
+
+  // The timer always waits for the back-off. A command may go earlier, but never during a 429 back-off
+  // and never twice within the minimum gap.
+  const mustWait = (manual: boolean): boolean => {
+    const now = deps.now()
+    if (now >= state.nextAllowedAt) return false
+    const rateLimited = state.failure?.kind === "rate-limited"
+    const tooSoon = now - lastAttemptAt < MIN_MANUAL_GAP_MS
+    return !manual || rateLimited || tooSoon
+  }
+
   const attempt = async (): Promise<RefreshOutcome> => {
     lastAttemptAt = deps.now()
     try {
       const credentials = await deps.readCredentials()
-      if (!credentials.ok) {
-        // A local check, not a network failure: retry at the normal interval, no back-off, so the
-        // footer recovers within 5 minutes after Claude Code refreshes its login.
-        publish({ ...state, failure: { kind: credentials.kind }, nextAllowedAt: deps.now() + POLL_INTERVAL_MS })
-        return "failed"
-      }
+      if (!credentials.ok) return retryAfterLogin({ kind: credentials.kind })
       const result = await deps.fetchUsage(credentials.token)
-      if (!result.ok) return fail(result.failure)
+      if (!result.ok) return result.failure.kind === "login-expired" ? retryAfterLogin(result.failure) : fail(result.failure)
       const snapshot = parseUsage(result.body, deps.now())
       if (!snapshot) return fail({ kind: "bad-response" })
       publish({ snapshot, failure: null, consecutiveFailures: 0, nextAllowedAt: deps.now() + POLL_INTERVAL_MS })
@@ -384,24 +417,21 @@ export function createUsageMonitor(deps: MonitorDeps) {
       try {
         const cache = await deps.loadCache()
         if (cache && !state.snapshot) {
-          publish({ ...state, snapshot: cache.snapshot, nextAllowedAt: Math.max(state.nextAllowedAt, Math.min(cache.nextAllowedAt, deps.now() + MAX_BACKOFF_MS)) })
+          publish({ ...state, snapshot: cache.snapshot, nextAllowedAt: laterAllowedAt(cache.nextAllowedAt) })
         }
       } catch {
         // ignore
       }
     },
-    // Called by the timer (manual = false) and by the command (manual = true).
+    // Called by the timer (manual = false) and by the command (manual = true). Reads the cache file
+    // before going to the network, so a 429 back-off from another window holds here too.
     async refresh(manual = false): Promise<RefreshOutcome> {
       if (inFlight) return inFlight
-      const now = deps.now()
-      if (now < state.nextAllowedAt) {
-        // The timer always waits for the back-off. A command may go earlier, but never during
-        // a 429 back-off and never twice within the minimum gap.
-        const rateLimited = state.failure?.kind === "rate-limited"
-        const tooSoon = now - lastAttemptAt < MIN_MANUAL_GAP_MS
-        if (!manual || rateLimited || tooSoon) return "skipped"
-      }
-      inFlight = attempt().finally(() => {
+      if (mustWait(manual)) return "skipped"
+      inFlight = (async () => {
+        await adoptSharedRateLimit()
+        return mustWait(manual) ? "skipped" : attempt()
+      })().finally(() => {
         inFlight = null
       })
       return inFlight

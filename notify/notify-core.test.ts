@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { DEBOUNCE_MS, createGate, createSeen, noticeFor } from "./notify-core"
+import { DEBOUNCE_MS, createGate, createNotifier, createSeen, noticeFor, type Kind, type NotifyResult } from "./notify-core"
 
 describe("createGate", () => {
   test("lets the first notification through and blocks the ones inside 20 seconds", () => {
@@ -70,17 +70,178 @@ describe("noticeFor", () => {
 })
 
 describe("createSeen", () => {
-  test("a key is accepted once until it is released", () => {
+  test("a key is claimed once until it is released", () => {
     const seen = createSeen()
-    expect(seen.first("per_1")).toBe(true)
-    expect(seen.first("per_1")).toBe(false)
+    expect(seen.claim("per_1")).toBe(true)
+    expect(seen.claim("per_1")).toBe(false)
     seen.release("per_1")
-    expect(seen.first("per_1")).toBe(true)
+    expect(seen.claim("per_1")).toBe(true)
   })
 
   test("keys are independent", () => {
     const seen = createSeen()
-    expect(seen.first("a")).toBe(true)
-    expect(seen.first("b")).toBe(true)
+    expect(seen.claim("a")).toBe(true)
+    expect(seen.claim("b")).toBe(true)
+  })
+})
+
+describe("createGate waitMs", () => {
+  test("says how long until the gate opens again", () => {
+    const gate = createGate(DEBOUNCE_MS)
+    gate.commit(1_000)
+    expect(gate.waitMs(6_000)).toBe(15_000)
+    expect(gate.waitMs(21_000)).toBe(0)
+  })
+})
+
+describe("createNotifier", () => {
+  const SHOWN: NotifyResult = { ok: true, notification: true, sound: true }
+
+  // A fake clock with its own timers, and an attention.notify stand-in that records what it was asked when.
+  const setup = () => {
+    let clock = 0
+    const timers: { fn: () => void; at: number; cleared: boolean }[] = []
+    const sent: { message: string; at: number }[] = []
+    let answer: () => Promise<NotifyResult> = async () => SHOWN
+    const notifier = createNotifier({
+      gate: createGate(DEBOUNCE_MS),
+      now: () => clock,
+      scheduler: {
+        set: (fn, ms) => {
+          const timer = { fn, at: clock + ms, cleared: false }
+          timers.push(timer)
+          return timer
+        },
+        clear: (handle) => void ((handle as { cleared: boolean }).cleared = true),
+      },
+      notify: (notice) => {
+        sent.push({ message: notice.message, at: clock })
+        return answer()
+      },
+    })
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
+    // Lets pending awaits finish, then fires every timer due by `to` in time order, the new ones included.
+    const advanceTo = async (to: number) => {
+      await settle()
+      for (;;) {
+        const due = timers.filter((t) => !t.cleared && t.at <= to).sort((a, b) => a.at - b.at)[0]
+        if (due === undefined) break
+        clock = due.at
+        due.cleared = true
+        due.fn()
+        await settle()
+      }
+      clock = to
+    }
+    const send = async (kind: Kind, requestID?: string) => {
+      notifier.send({ kind, notice: noticeFor(kind, { parentID: undefined })!, requestID })
+      await settle()
+    }
+    const liveTimers = () => timers.filter((t) => !t.cleared).length
+    return { notifier, sent, advanceTo, send, liveTimers, answerWith: (next: () => Promise<NotifyResult>) => void (answer = next) }
+  }
+
+  test("a permission asked inside the 20 seconds pings when they end", async () => {
+    const { sent, advanceTo, send } = setup()
+    await send("done")
+    await advanceTo(5_000)
+    await send("permission", "per_1")
+    await advanceTo(30_000)
+    expect(sent).toEqual([
+      { message: "ho finito", at: 0 },
+      { message: "serve un permesso", at: 20_000 },
+    ])
+  })
+
+  test("a question asked while another ping is still being sent pings 20 seconds after that one", async () => {
+    const { sent, advanceTo, send, answerWith } = setup()
+    let finish: (result: NotifyResult) => void = () => {}
+    answerWith(() => new Promise((resolve) => (finish = resolve)))
+    await send("done")
+    await send("form", "frm_1")
+    answerWith(async () => SHOWN)
+    finish(SHOWN)
+    await advanceTo(30_000)
+    expect(sent).toEqual([
+      { message: "ho finito", at: 0 },
+      { message: "serve una risposta", at: 20_000 },
+    ])
+  })
+
+  test("a permission answered before the gate opens never pings", async () => {
+    const { notifier, sent, advanceTo, send } = setup()
+    await send("done")
+    await advanceTo(5_000)
+    await send("permission", "per_1")
+    await advanceTo(10_000)
+    notifier.cancel("permission", "per_1")
+    await advanceTo(30_000)
+    expect(sent).toEqual([{ message: "ho finito", at: 0 }])
+  })
+
+  test("two requests that wait: only the latest pings when the 20 seconds end", async () => {
+    const { sent, advanceTo, send } = setup()
+    await send("done")
+    await advanceTo(5_000)
+    await send("permission", "per_1")
+    await advanceTo(6_000)
+    await send("form", "frm_1")
+    await advanceTo(30_000)
+    expect(sent).toEqual([
+      { message: "ho finito", at: 0 },
+      { message: "serve una risposta", at: 20_000 },
+    ])
+  })
+
+  test("a ping that was not shown does not use up the 20 seconds: a waiting request goes at once", async () => {
+    const { sent, advanceTo, send, answerWith } = setup()
+    let finish: (result: NotifyResult) => void = () => {}
+    answerWith(() => new Promise((resolve) => (finish = resolve)))
+    await send("done")
+    await advanceTo(1_000)
+    await send("permission", "per_1")
+    answerWith(async () => SHOWN)
+    finish({ ok: true, skipped: "focused" })
+    await advanceTo(1_000)
+    expect(sent).toEqual([
+      { message: "ho finito", at: 0 },
+      { message: "serve un permesso", at: 1_000 },
+    ])
+  })
+
+  test("dispose clears the timer of a waiting request", async () => {
+    const { notifier, sent, advanceTo, send, liveTimers } = setup()
+    await send("done")
+    await advanceTo(5_000)
+    await send("permission", "per_1")
+    notifier.dispose()
+    const left = liveTimers()
+    await advanceTo(30_000)
+    expect([left, sent]).toEqual([0, [{ message: "ho finito", at: 0 }]])
+  })
+
+  test("after dispose nothing pings: not a request left behind a ping in flight, not a new one", async () => {
+    const { notifier, sent, advanceTo, send, answerWith } = setup()
+    let finish: (result: NotifyResult) => void = () => {}
+    answerWith(() => new Promise((resolve) => (finish = resolve)))
+    await send("done")
+    await advanceTo(5_000)
+    await send("permission", "per_1")
+    notifier.dispose()
+    answerWith(async () => SHOWN)
+    finish(SHOWN)
+    await advanceTo(25_000)
+    await send("form", "frm_1")
+    await advanceTo(60_000)
+    expect(sent).toEqual([{ message: "ho finito", at: 0 }])
+  })
+
+  test("a finished reply inside the 20 seconds stays silent", async () => {
+    const { sent, advanceTo, send } = setup()
+    await send("done")
+    await advanceTo(5_000)
+    await send("done")
+    await advanceTo(30_000)
+    expect(sent).toEqual([{ message: "ho finito", at: 0 }])
   })
 })
