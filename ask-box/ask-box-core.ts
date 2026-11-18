@@ -144,14 +144,12 @@ export function askText(text: string, width: number): string {
 export type Scheduler = { set: (fn: () => void, ms: number) => unknown; clear: (handle: unknown) => void }
 
 // Turns a stream of measured widths into few updates: the first real size is applied at once, later ones
-// are coalesced to one update per `delayMs`, and a size that is already shown does nothing.
+// are coalesced to one update per RESIZE_COALESCE_MS, and a size that is already shown does nothing.
 export function createWidthTracker(options: {
   initial: number
   onChange: (width: number) => void
-  delayMs?: number
   scheduler?: Scheduler
 }) {
-  const delay = options.delayMs ?? RESIZE_COALESCE_MS
   const scheduler: Scheduler = options.scheduler ?? {
     set: (fn, ms) => setTimeout(fn, ms),
     clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
@@ -180,7 +178,7 @@ export function createWidthTracker(options: {
         flush()
         return
       }
-      if (handle === undefined) handle = scheduler.set(flush, delay)
+      if (handle === undefined) handle = scheduler.set(flush, RESIZE_COALESCE_MS)
     },
     dispose() {
       disposed = true
