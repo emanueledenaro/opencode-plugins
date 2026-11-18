@@ -51,6 +51,7 @@ export function createNotifier(options: {
   const waiting = new Map<string, Ping>()
   let busy = false
   let timer: unknown
+  let disposed = false
 
   const stopTimer = () => {
     if (timer !== undefined) scheduler.clear(timer)
@@ -90,6 +91,7 @@ export function createNotifier(options: {
 
   return {
     send(ping: Ping) {
+      if (disposed) return
       if (!busy && gate.ready(now())) return void deliver(ping)
       // Only a request someone must answer is worth the wait; a finished reply is old news 20 seconds later.
       if (ping.requestID === undefined) return trace(`${ping.kind}: debounced`)
@@ -102,7 +104,9 @@ export function createNotifier(options: {
     cancel(kind: Kind, requestID: string) {
       if (waiting.delete(keyOf(kind, requestID))) sendWaiting()
     },
+    /** Final: clears the timer and the waiting requests, and nothing is sent after it. */
     dispose() {
+      disposed = true
       stopTimer()
       waiting.clear()
     },
@@ -113,7 +117,8 @@ export function createNotifier(options: {
 export function createSeen() {
   const keys = new Set<string>()
   return {
-    first(key: string): boolean {
+    /** Records the key; false when it was already recorded and not released since. */
+    claim(key: string): boolean {
       if (keys.has(key)) return false
       keys.add(key)
       return true
