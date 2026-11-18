@@ -45,7 +45,7 @@ Anthropic can change or remove this endpoint at any time. The footer then says t
 - An expired token is never refreshed. The footer asks you to open `claude`, and the plugin checks again in 5 minutes, also when the server refuses the token (401 or 403).
 - One host, `api.anthropic.com`. 10 second timeout, redirects refused, error bodies never read or shown.
 - At most one poll every 5 minutes per OpenCode window, plus `/claude-usage` (not twice within 30 s, not during a 429 back-off). Failures back off 10, 20, 40, then 60 minutes; a 429 honours `Retry-After`. A 429 back-off is kept in the cache file and read before every poll, so it holds after `/reload` and in every OpenCode window.
-- Only the numbers and the next-attempt time (and, during a 429 back-off, its end) are cached, in `~/.local/state/opencode/claude-usage.json` (mode 0600). Delete it any time. Cache files written before the Fable meter existed still load (Fable is just absent until the next poll).
+- Only the numbers and the next-attempt time (and, during a 429 back-off, its end) are cached, in `~/.local/state/opencode/claude-usage.json` (mode 0600). Delete it any time. A symlink or a pipe in its place is refused, never followed or waited on, so a bad file there cannot stop the footer. Cache files written before the Fable meter existed still load (Fable is just absent until the next poll).
 - No model call and no prompt.
 
 macOS may ask once whether `security` can read the `Claude Code-credentials` item.
@@ -56,7 +56,7 @@ macOS may ask once whether `security` can read the `Claude Code-credentials` ite
 - `claude-usage.ts`: the only file with I/O (keychain, the one request, the cache file).
 - `tui.tsx`: footer meters and icon, click handling, `/claude-usage` dialog, toast. Render errors are written to `/tmp/claude-usage-render-error.txt`.
 - `index.ts`: an empty server part, so OpenCode loads the directory.
-- `claude-usage-core.test.ts`: `bun test`, fake tokens only.
+- `claude-usage-core.test.ts`: `bun test`, fake tokens only. `claude-usage-cache.test.ts`: the cache file, in a temp folder.
 
 Theme note for OpenCode plugin authors: `theme.text.base`, `text.muted` and `text.faint` are colours, but `theme.text.feedback.error|warning|success|info` are objects. Use `.base` on them.
 
