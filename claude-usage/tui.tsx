@@ -10,6 +10,7 @@ import {
   createClickGate,
   createFableWatch,
   createHoverGate,
+  createResizeWatch,
   createWidthTracker,
   dialogLayout,
   failureIt,
@@ -35,20 +36,9 @@ import {
   type TextTone,
   type UsageWindow,
 } from "./claude-usage-core.ts"
-import { createLiveMonitor, isDisabled } from "./claude-usage.ts"
-
-// Render errors only (no token is ever in the render path): message and stack, for debugging.
-function reportRenderError(where: string, error: unknown) {
-  try {
-    const text = error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : String(error)
-    require("node:fs").writeFileSync("/tmp/claude-usage-render-error.txt", `${new Date().toISOString()} ${where}\n${text}\n`)
-  } catch {
-    // best effort
-  }
-}
+import { createLiveMonitor, isDisabled, reportRenderError } from "./claude-usage.ts"
 
 const TICK_MS = 30_000 // the monitor itself enforces the 5 minute interval and the back-off
-const LAYOUT_CHECK_MS = 1_000 // re-reads the row width, e.g. after the sidebar opens; no redraw unless it changed
 const LAYOUT_SETTLE_MS = 40 // after a resize event the layout is ready within a frame or two
 const PATH_RESERVE = 12 // columns OpenCode's own status box keeps when the footer item grows
 const FALLBACK_OTHERS = 45 // path and key hints, when the row cannot be measured
@@ -162,10 +152,15 @@ export default Plugin.define({
       const [budget, setBudget] = createSignal(fallback())
       const tracker = createWidthTracker({ initial: budget(), onChange: setBudget })
       let box: Node | undefined
+      // A resize of the row or of any item in it (the sidebar opens, a neighbour grows) re-measures,
+      // after the layout pass, as onSizeChange below does.
+      const resizes = createResizeWatch(() => queueMicrotask(measure))
       const measure = () => {
         try {
           if (!box) return
-          const grower = box.parent?.getChildren?.().find((kid) => kid !== box && (kid.getFlexGrow?.() ?? 0) > 0)
+          const items = box.parent?.getChildren?.() ?? []
+          resizes.follow([box.parent, ...items])
+          const grower = items.find((kid) => kid !== box && (kid.getFlexGrow?.() ?? 0) > 0)
           tracker.report(rowBudget(box.width, grower?.width, PATH_RESERVE) ?? fallback())
         } catch {
           tracker.report(fallback())
@@ -192,13 +187,12 @@ export default Plugin.define({
       const hover = createHoverGate(setHovered)
       hoverResets.add(hover.reset)
       renderer.on?.("blur", hover.reset)
-      const check = setInterval(measure, LAYOUT_CHECK_MS)
       onCleanup(() => {
         renderer.off?.("resize", onResize)
         renderer.off?.("blur", hover.reset)
         hoverResets.delete(hover.reset)
         if (afterResize !== undefined) clearTimeout(afterResize)
-        clearInterval(check)
+        resizes.dispose()
         tracker.dispose()
         if (box) box.onSizeChange = undefined
       })

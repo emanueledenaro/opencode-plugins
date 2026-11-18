@@ -728,6 +728,36 @@ export function createWidthTracker(options: {
 }
 
 /**
+ * Listens to "resize" on exactly the nodes last passed to `follow`: new ones are added and nodes that left
+ * are let go, so a node the host swapped out of the row is not kept alive. `dispose` lets go of all of them.
+ * Keep identical in token-rate-core.ts and claude-usage-core.ts: copies.test.ts at the root compares them.
+ */
+export function createResizeWatch(onResize: () => void) {
+  type Resizable = { on: (event: string, listener: () => void) => unknown; off?: (event: string, listener: () => void) => unknown }
+  const isResizable = (node: unknown): node is Resizable => typeof (node as { on?: unknown } | null)?.on === "function"
+  const watched = new Set<Resizable>()
+  return {
+    follow(nodes: readonly unknown[]) {
+      const current = new Set(nodes.filter(isResizable))
+      for (const node of watched) {
+        if (current.has(node)) continue
+        node.off?.("resize", onResize)
+        watched.delete(node)
+      }
+      for (const node of current) {
+        if (watched.has(node)) continue
+        node.on("resize", onResize)
+        watched.add(node)
+      }
+    },
+    dispose() {
+      for (const node of watched) node.off?.("resize", onResize)
+      watched.clear()
+    },
+  }
+}
+
+/**
  * Columns my footer item may use: its own width plus what the flexible neighbour (the path) has above
  * `reserve`. Undefined when there is no such neighbour to measure. At least 1.
  */

@@ -4,7 +4,7 @@ A read-only OpenCode 2 plugin that shows how much of your Claude subscription yo
 
 ## What you see
 
-- Under the prompt, always: a small coloured meter per window, `sett ▰▰▰▰▰▰ 96%   fable ▰▱▱▱▱▱ 12%`, with a 5-hour meter in front when the plan has that window: `5h ▰▰▱▱▱▱ 23%   sett ▰▰▰▰▰▰ 96%`. Green under 70%, yellow from 70%, red above 90% (Fable has its own lines, below). A window the API does not report is not drawn: Ultra plans have no 5-hour window, so the footer starts at `sett` (there is no `5h libero`). The item measures the room it has in the footer row (not the terminal width) and re-measures when the window or the sidebar changes. When the room shrinks it drops the `(vecchio)` marker first, then shortens the bars (6, 5, 4, 3 cells) with every window kept, Fable included. When even the 3-cell bars do not fit, the whole item becomes one icon, `◉`, coloured with the worst level among the windows shown: red beats yellow beats green, each window by its own thresholds. If the numbers are old (the last refresh failed) the icon is faint, unless it is red: a red icon stays red. With no room for even one column the item shows nothing. It never wraps onto a second line and never gets wider as the room shrinks.
+- Under the prompt, always: a small coloured meter per window, `sett ▰▰▰▰▰▰ 96%   fable ▰▱▱▱▱▱ 12%`, with a 5-hour meter in front when the plan has that window: `5h ▰▰▱▱▱▱ 23%   sett ▰▰▰▰▰▰ 96%`. Green under 70%, yellow from 70%, red above 90% (Fable has its own lines, below). A window the API does not report is not drawn: Ultra plans have no 5-hour window, so the footer starts at `sett` (there is no `5h libero`). The item measures the room it has in the footer row (not the terminal width) and re-measures when the window, the sidebar or a neighbour in the row changes size (it listens to their resize events; there is no polling). When the room shrinks it drops the `(vecchio)` marker first, then shortens the bars (6, 5, 4, 3 cells) with every window kept, Fable included. When even the 3-cell bars do not fit, the whole item becomes one icon, `◉`, coloured with the worst level among the windows shown: red beats yellow beats green, each window by its own thresholds. If the numbers are old (the last refresh failed) the icon is faint, unless it is red: a red icon stays red. With no room for even one column the item shows nothing. It never wraps onto a second line and never gets wider as the room shrinks.
 - Click the meters or the icon (left button) to open the same dialog as `/claude-usage`, with a refresh. A click is a press and a release on the same cell, so dragging across the footer to select text, or a release that started somewhere else, does nothing. The footer is not focusable: the prompt keeps the keyboard focus.
 - While the mouse is over the footer item it lights up (labels one step brighter, the theme's own hover fill behind it, no change in width) and goes back when the mouse leaves, the terminal loses focus or the dialog opens; a terminal sends no event when the mouse leaves its window, so the highlight can stay until the next mouse move or a focus change.
 - Above 90% weekly, one warning toast the first time it crosses.
@@ -14,7 +14,7 @@ A read-only OpenCode 2 plugin that shows how much of your Claude subscription yo
 
 ## Install
 
-macOS only (the token is read from the macOS keychain). Needs OpenCode 2.2 or later and a Claude Code login (`claude` signed in with a Pro, Max or Ultra plan).
+macOS only (the token is read from the macOS keychain). Needs OpenCode 2 (the root README says which version was last checked) and a Claude Code login (`claude` signed in with a Pro, Max or Ultra plan).
 
 ```sh
 git clone https://github.com/emanueledenaro/opencode-plugins ~/opencode-plugins
@@ -26,7 +26,7 @@ Then add the `claude-usage` folder to `plugin` in `~/.config/opencode/opencode.j
 { "plugin": ["/Users/you/opencode-plugins/claude-usage"] }
 ```
 
-Run `/reload` in OpenCode. OpenCode 2.2 loads only directories as plugins, and it reloads only the files inside the plugin directory, so keep every file here.
+Run `/reload` in OpenCode. OpenCode 2 loads only directories as plugins, and it reloads only the files inside the plugin directory, so keep every file here.
 
 ## Where the data comes from
 
@@ -53,10 +53,10 @@ macOS may ask once whether `security` can read the `Claude Code-credentials` ite
 ## Files
 
 - `claude-usage-core.ts`: pure logic (parsing, formatting, thresholds, back-off, the polling state machine).
-- `claude-usage.ts`: the only file with I/O (keychain, the one request, the cache file).
-- `tui.tsx`: footer meters and icon, click handling, `/claude-usage` dialog, toast. Render errors are written to `/tmp/claude-usage-render-error.txt`.
+- `claude-usage.ts`: the only file with I/O (keychain, the one request, the cache file, the render error file).
+- `tui.tsx`: footer meters and icon, click handling, `/claude-usage` dialog, toast. Render errors are written by `claude-usage.ts` to `~/.local/state/opencode/claude-usage-render-error.txt` (mode 0600, a symlink in its place is refused).
 - `index.ts`: an empty server part, so OpenCode loads the directory.
-- `claude-usage-core.test.ts`: `bun test`, fake tokens only.
+- `claude-usage-core.test.ts`: `bun test`, fake tokens only. `claude-usage-io.test.ts`: the render error file, in a temp folder.
 
 Theme note for OpenCode plugin authors: `theme.text.base`, `text.muted` and `text.faint` are colours, but `theme.text.feedback.error|warning|success|info` are objects. Use `.base` on them.
 

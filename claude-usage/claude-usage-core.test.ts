@@ -16,6 +16,7 @@ import {
   FOOTER_ICON,
   dialogLayout,
   fitText,
+  createResizeWatch,
   createWidthTracker,
   rowBudget,
   footerMessage,
@@ -900,6 +901,57 @@ describe("createWidthTracker", () => {
     t.dispose()
     expect(f.jobs.length).toBe(0)
     expect(seen).toEqual([75])
+  })
+})
+
+describe("createResizeWatch", () => {
+  // A stand-in for an OpenTUI node: it records its resize listeners (a listener added twice counts twice,
+  // as on an EventEmitter) and can fire them.
+  const fakeNode = () => {
+    const listeners: (() => void)[] = []
+    return {
+      get listeners() {
+        return { size: listeners.length }
+      },
+      on: (event: string, fn: () => void) => void (event === "resize" && listeners.push(fn)),
+      off: (event: string, fn: () => void) => {
+        const at = event === "resize" ? listeners.indexOf(fn) : -1
+        if (at !== -1) listeners.splice(at, 1)
+      },
+      resize: () => [...listeners].forEach((fn) => fn()),
+    }
+  }
+
+  test("a resize of any followed node calls back; following again adds no second listener", () => {
+    let calls = 0
+    const row = fakeNode()
+    const path = fakeNode()
+    const watch = createResizeWatch(() => calls++)
+    watch.follow([row, path])
+    watch.follow([row, path])
+    row.resize()
+    path.resize()
+    expect([calls, row.listeners.size, path.listeners.size]).toEqual([2, 1, 1])
+  })
+
+  test("a node that left the row is let go, a new one is followed", () => {
+    let calls = 0
+    const gone = fakeNode()
+    const fresh = fakeNode()
+    const watch = createResizeWatch(() => calls++)
+    watch.follow([gone])
+    watch.follow([fresh, { width: 3 }, null])
+    gone.resize()
+    fresh.resize()
+    expect([calls, gone.listeners.size, fresh.listeners.size]).toEqual([1, 0, 1])
+  })
+
+  test("dispose lets go of every node", () => {
+    const row = fakeNode()
+    const watch = createResizeWatch(() => {})
+    watch.follow([row])
+    watch.dispose()
+    expect(row.listeners.size).toBe(0)
   })
 })
 

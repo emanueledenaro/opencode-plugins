@@ -7,6 +7,7 @@
 // program cannot read it. If Anthropic changes or closes the endpoint the plugin shows
 // "usage unavailable" and nothing else breaks.
 import { execFile } from "node:child_process"
+import { closeSync, constants, fchmodSync, fstatSync, ftruncateSync, mkdirSync, openSync, writeSync } from "node:fs"
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
@@ -24,6 +25,7 @@ export const USAGE_URL = "https://api.anthropic.com/api/oauth/usage" // the only
 export const KEYCHAIN_SERVICE = "Claude Code-credentials"
 export const REQUEST_TIMEOUT_MS = 10_000
 export const CACHE_PATH = join(homedir(), ".local", "state", "opencode", "claude-usage.json")
+export const RENDER_ERROR_PATH = join(dirname(CACHE_PATH), "claude-usage-render-error.txt")
 
 // Reads the keychain item on every call. The returned token lives in memory only.
 function readKeychain(): Promise<string | null> {
@@ -113,6 +115,36 @@ export function createLiveMonitor() {
     loadCache,
     saveCache,
   })
+}
+
+/**
+ * Keeps the last render error (message and stack; no token is ever in the render path) for debugging.
+ * O_NOFOLLOW: a symlink in its place is refused. O_NONBLOCK and the isFile check: a pipe is left alone.
+ * fchmod narrows an older, wider file. Best effort: any failure is dropped.
+ */
+export function reportRenderError(where: string, error: unknown, file = RENDER_ERROR_PATH): void {
+  let fd: number | undefined
+  try {
+    mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
+    fd = openSync(file, constants.O_WRONLY | constants.O_CREAT | constants.O_NOFOLLOW | constants.O_NONBLOCK, 0o600)
+    if (!fstatSync(fd).isFile()) return
+    fchmodSync(fd, 0o600)
+    ftruncateSync(fd)
+    const text = error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : String(error)
+    writeSync(fd, `${new Date().toISOString()} ${where}\n${text}\n`)
+  } catch {
+    // best effort
+  } finally {
+    if (fd !== undefined) closeQuietly(fd)
+  }
+}
+
+function closeQuietly(fd: number): void {
+  try {
+    closeSync(fd)
+  } catch {
+    // already closed
+  }
 }
 
 // Disable switch: CLAUDE_USAGE_DISABLED=1 in the environment, or remove the plugin entry.
