@@ -64,8 +64,11 @@ export const normalizeSelection = (raw: unknown): string | null => {
 export const normalizeComment = (raw: unknown): string => {
   if (typeof raw !== "string") return ""
   const flat = raw.replace(/\s*[\r\n]+\s*/g, " ").trim()
-  return flat.length <= MAX_COMMENT_CHARS ? flat : cutAt(flat, MAX_COMMENT_CHARS)
+  return flat.length <= MAX_COMMENT_CHARS ? flat : cutComment(flat, MAX_COMMENT_CHARS)
 }
+
+// A cut can end right after a space; the file reader accepts only trimmed comments, so trim again.
+const cutComment = (comment: string, budget: number): string => cutAt(comment, budget).trimEnd()
 
 const cutAt = (text: string, budget: number): string => {
   let end = budget
@@ -88,7 +91,7 @@ export const capQuotes = (quotes: readonly PendingQuote[]): { quotes: PendingQuo
       return quote
     }
     truncated = true
-    const comment = cutAt(quote.comment, Math.min(quote.comment.length, remaining))
+    const comment = cutComment(quote.comment, Math.min(quote.comment.length, remaining))
     const body = cutAt(quote.text, remaining - comment.length)
     remaining = 0
     // The note says the quote was cut, so it is added only when the text itself lost something.
