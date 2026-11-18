@@ -1,6 +1,7 @@
 // TUI part of the stato plugin (OpenCode 2 plugin API, docs: /build/plugins/cli, section Markdown).
 // Registers a renderer for fenced ```stato blocks: each line is drawn in the theme colour of its first
-// symbol (✓ success, ✗ error, … warning, ➜ info). Long lines wrap. It reads only the text of the block.
+// symbol (✓ success, ✗ error, ≈ warning, ➜ info; the older … and ◐ still count as ≈). Long lines wrap.
+// It reads only the text of the block.
 // If anything goes wrong the block is drawn by the default renderer. The logic is in ./stato-core.ts and
 // ./stato-render.ts (tested); this file only hands in the real OpenTUI classes.
 import { Plugin } from "@opencode/plugin/tui"
