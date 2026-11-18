@@ -77,13 +77,27 @@ type StepStart = { sessionID: string; messageID: string; startedAt: number; prov
 export function createRateTracker() {
   const collector = createThroughputCollector()
   const steps = new Map<string, StepStart>()
+  // Every step that has a start here or deltas in the collector, so an ended session can drop them all.
+  const open = new Map<string, { sessionID: string; messageID: string }>()
   const key = (sessionID: string, messageID: string) => `${sessionID}:${messageID}`
+  const opened = (sessionID: string, messageID: string) => open.set(key(sessionID, messageID), { sessionID, messageID })
+
+  // Drops a step's start and its collected deltas without producing a measurement.
+  const forget = (sessionID: string, messageID: string) => {
+    const k = key(sessionID, messageID)
+    steps.delete(k)
+    open.delete(k)
+    // completing with no tokens drops the collected deltas
+    collector.completeMessage({ sessionID, messageID, createdAt: 0, outputTokens: 0, providerID: "", modelID: "" })
+  }
 
   return {
     stepStarted(input: StepStart) {
       steps.set(key(input.sessionID, input.messageID), input)
+      opened(input.sessionID, input.messageID)
     },
     textDelta(input: { sessionID: string; messageID: string; ordinal: number; at: number }) {
+      opened(input.sessionID, input.messageID)
       collector.recordTextDelta({
         sessionID: input.sessionID,
         messageID: input.messageID,
@@ -96,6 +110,7 @@ export function createRateTracker() {
       const k = key(input.sessionID, input.messageID)
       const step = steps.get(k)
       steps.delete(k)
+      open.delete(k)
       const measurement = collector.completeMessage({
         sessionID: input.sessionID,
         messageID: input.messageID,
@@ -107,16 +122,11 @@ export function createRateTracker() {
       return step ? measurement : undefined
     },
     stepFailed(input: { sessionID: string; messageID: string }) {
-      steps.delete(key(input.sessionID, input.messageID))
-      // completing with no tokens drops the collected deltas without producing a measurement
-      collector.completeMessage({
-        sessionID: input.sessionID,
-        messageID: input.messageID,
-        createdAt: 0,
-        outputTokens: 0,
-        providerID: "",
-        modelID: "",
-      })
+      forget(input.sessionID, input.messageID)
+    },
+    /** A run that failed or was interrupted can leave a step with no end: drop all of that session's steps. */
+    endSession(sessionID: string) {
+      for (const step of [...open.values()]) if (step.sessionID === sessionID) forget(step.sessionID, step.messageID)
     },
   }
 }
@@ -470,12 +480,81 @@ export function padColumns(rows: string[][], align: ("left" | "right")[]): strin
 }
 
 // ---- Responsive width ---------------------------------------------------------------------------
+
+/**
+ * Listens to "resize" on exactly the nodes last passed to `follow`: new ones are added and nodes that left
+ * are let go, so a node the host swapped out of the row is not kept alive. `dispose` lets go of all of them
+ * and is final: a later `follow` does nothing.
+ * Keep identical in token-rate-core.ts and claude-usage-core.ts: copies.test.ts at the root compares them.
+ */
+export function createResizeWatch(onResize: () => void) {
+  type Resizable = { on: (event: string, listener: () => void) => unknown; off?: (event: string, listener: () => void) => unknown }
+  const isResizable = (node: unknown): node is Resizable => typeof (node as { on?: unknown } | null)?.on === "function"
+  const watched = new Set<Resizable>()
+  let disposed = false
+  return {
+    follow(nodes: readonly unknown[]) {
+      if (disposed) return // a measure queued before cleanup may still call this
+      const current = new Set(nodes.filter(isResizable))
+      for (const node of watched) {
+        if (current.has(node)) continue
+        node.off?.("resize", onResize)
+        watched.delete(node)
+      }
+      for (const node of current) {
+        if (watched.has(node)) continue
+        node.on("resize", onResize)
+        watched.add(node)
+      }
+    },
+    dispose() {
+      disposed = true
+      for (const node of watched) node.off?.("resize", onResize)
+      watched.clear()
+    },
+  }
+}
+
+/**
+ * Raises one host node's flexShrink while it is held and puts its own value back when it is let go: the path
+ * item takes the whole cut of a full footer row, and the same box must not keep that while it holds OpenCode's
+ * "esc interrupt" hint instead. Host nodes are not a public API, so every write is guarded.
+ */
+export function createShrinkHold(shrink: number) {
+  type Shrinkable = { flexShrink?: unknown; isDestroyed?: unknown }
+  let held: { node: Shrinkable; was: unknown } | undefined
+  let disposed = false
+  const release = () => {
+    const current = held
+    held = undefined
+    try {
+      if (current && !current.node.isDestroyed) current.node.flexShrink = current.was ?? 1
+    } catch {}
+  }
+  return {
+    hold(node: Shrinkable) {
+      if (disposed || held?.node === node) return
+      release()
+      try {
+        if (!node || !("flexShrink" in node)) return
+        held = { node, was: node.flexShrink }
+        node.flexShrink = shrink
+      } catch {}
+    },
+    release,
+    /** Puts the value back for good: a hold after it (a measure queued before cleanup) writes nothing. */
+    dispose() {
+      disposed = true
+      release()
+    },
+  }
+}
 // The footer row is shared with other plugins and OpenCode's own hints. The footer takes only the room
 // that is left and steps down: sparkline and rate, then the rate alone, then nothing.
 
 /** Cells of padding in front of the footer text. */
 const FOOTER_PADDING = 2
-/** The gap OpenCode 2.2.6 puts between the items of the prompt footer row. */
+/** The gap OpenCode puts between the items of the prompt footer row (read in the binary; see the root README). */
 export const FOOTER_ROW_GAP = 2
 /** One cell kept free so that a rounding in the layout never squeezes a neighbour. */
 const FOOTER_SPARE_CELLS = 1

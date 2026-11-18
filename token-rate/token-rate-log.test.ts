@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { existsSync, chmodSync, closeSync, constants, mkdtempSync, mkdirSync, openSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { appendMeasurement, readMeasurements, ROTATE_BYTES, READ_LIMIT_BYTES } from "./token-rate-log"
+import { appendMeasurement, createLogWriter, readMeasurements, ROTATE_BYTES, READ_LIMIT_BYTES } from "./token-rate-log"
 import type { ThroughputMeasurement } from "./token-rate-core"
 
 const meas = (messageID: string): ThroughputMeasurement => ({
@@ -137,5 +137,26 @@ describe("appendMeasurement", () => {
     } finally {
       closeSync(reader)
     }
+  })
+})
+
+describe("createLogWriter", () => {
+  test("two steps that end together at the rotation size keep both lines and the old log", async () => {
+    const file = join(dir, "together.jsonl")
+    const old = line("old1") + line("old2")
+    writeFileSync(file, old, { mode: 0o600 })
+    const writer = createLogWriter(file, old.length - 1)
+    await Promise.all([writer.append(meas("a")), writer.append(meas("b"))])
+    expect([readFileSync(`${file}.1`, "utf8"), readFileSync(file, "utf8")]).toEqual([old, line("a") + line("b")])
+  })
+
+  test("a failed append does not stop the next one", async () => {
+    const file = join(dir, "after-failure.jsonl")
+    mkdirSync(file) // a folder in place of the log: this append fails
+    const writer = createLogWriter(file)
+    await expect(writer.append(meas("a"))).rejects.toThrow()
+    rmSync(file, { recursive: true })
+    await writer.append(meas("b"))
+    expect(readFileSync(file, "utf8")).toBe(line("b"))
   })
 })

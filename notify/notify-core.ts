@@ -4,7 +4,7 @@
 
 export const DEBOUNCE_MS = 20_000
 
-export type Kind = "done" | "permission" | "form"
+export type Kind = "done" | "failed" | "permission" | "form"
 export type Notice = { title: string; message: string; sound: string }
 /** The fields of the attention.notify answer the plugin reads. */
 export type NotifyResult = { ok?: boolean; skipped?: unknown; notification?: unknown; sound?: unknown }
@@ -129,16 +129,22 @@ export function createSeen() {
   }
 }
 
+// The sound names are OpenCode's attention sounds (2.3.0: default, question, permission, error, done, subagent_done).
+const NOTICES: Record<Kind, Notice> = {
+  done: { title: "OpenCode", message: "ho finito", sound: "done" },
+  failed: { title: "OpenCode", message: "mi sono fermato per un errore", sound: "error" },
+  permission: { title: "OpenCode", message: "serve un permesso", sound: "permission" },
+  form: { title: "OpenCode", message: "serve una risposta", sound: "question" },
+}
+
+/** Only the main (parentless) session announces that it finished or failed; a child doing so is too noisy. */
+const MAIN_SESSION_ONLY: ReadonlySet<Kind> = new Set<Kind>(["done", "failed"])
+
 /**
  * `session` is what OpenCode knows about the session the event belongs to (undefined if nothing).
- * Only the main (parentless) session announces that it finished; a child finishing is too noisy.
  * A permission or a form is always worth a ping, also from a child, because the child waits for you.
  */
 export function noticeFor(kind: Kind, session: { parentID?: string } | undefined): Notice | undefined {
-  if (kind === "done") {
-    if (!session || session.parentID) return undefined
-    return { title: "OpenCode", message: "ho finito", sound: "done" }
-  }
-  if (kind === "permission") return { title: "OpenCode", message: "serve un permesso", sound: "permission" }
-  return { title: "OpenCode", message: "serve una risposta", sound: "question" }
+  if (MAIN_SESSION_ONLY.has(kind) && (!session || session.parentID)) return undefined
+  return { ...NOTICES[kind] }
 }

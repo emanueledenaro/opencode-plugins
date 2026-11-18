@@ -13,7 +13,7 @@ SUBAGENTI                           3
   Opus     rilettura #103         2m
            └ chiede un permesso
 
-⠹ Al lavoro
+▗ Al lavoro
   Sonnet   #90 allineamento      12m
            └ make
   Sonnet   citazioni              4m

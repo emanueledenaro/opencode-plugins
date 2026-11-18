@@ -5,6 +5,8 @@ import {
   SPINNER_FRAMES,
   buildView,
   clockIt,
+  createRefreshBatch,
+  REFRESH_BATCH_MS,
   createRunTracker,
   createWidthTracker,
   displayTitle,
@@ -30,7 +32,7 @@ const child = (over: Partial<ChildInput> & { id: string }): ChildInput => ({
   ...over,
 })
 
-/** Plain-text version of a view, the way the sidebar draws it (spinner frame 2 = "⠹"). */
+/** Plain-text version of a view, the way the sidebar draws it (spinner frame 2 = "▗"). */
 function lines(view: View): string[] {
   if (view.empty) return [view.emptyText]
   const out = [view.header.title + view.header.count]
@@ -141,15 +143,15 @@ describe("toolDetail", () => {
 })
 
 describe("spinnerFrame", () => {
-  test("ten braille frames that wrap around", () => {
-    expect(SPINNER_FRAMES).toEqual(["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
-    expect(spinnerFrame(0)).toBe("⠋")
-    expect(spinnerFrame(9)).toBe("⠏")
-    expect(spinnerFrame(10)).toBe("⠋")
-    expect(spinnerFrame(22)).toBe("⠹")
+  test("four quadrant frames that wrap around (SF Mono and Menlo have no braille)", () => {
+    expect(SPINNER_FRAMES).toEqual(["▘", "▝", "▗", "▖"])
+    expect(spinnerFrame(0)).toBe("▘")
+    expect(spinnerFrame(3)).toBe("▖")
+    expect(spinnerFrame(4)).toBe("▘")
+    expect(spinnerFrame(10)).toBe("▗")
   })
   test("a negative index does not break", () => {
-    expect(spinnerFrame(-1)).toBe("⠏")
+    expect(spinnerFrame(-1)).toBe("▖")
   })
 })
 
@@ -166,6 +168,9 @@ describe("displayTitle", () => {
   })
   test("collapses line breaks so the row stays on one line", () => {
     expect(displayTitle("uno\ndue\n\ntre", 40)).toBe("uno due tre")
+  })
+  test("never cuts an emoji in half", () => {
+    expect(displayTitle(`${"a".repeat(18)}😀bcd`, 20)).toBe(`${"a".repeat(18)}😀…`)
   })
 })
 
@@ -266,7 +271,7 @@ describe("buildView, the approved mockup", () => {
       "  Opus     rilettura #103       2m",
       "           └ chiede un permesso",
       "",
-      "⠹ Al lavoro",
+      "▗ Al lavoro",
       "  Sonnet   #90 allineamento    12m",
       "           └ make check",
       "  Sonnet   citazioni            4m",
@@ -701,5 +706,57 @@ describe("createWidthTracker", () => {
     t.dispose()
     expect(f.jobs).toHaveLength(0)
     expect(seen).toEqual([38])
+  })
+})
+
+describe("createRefreshBatch", () => {
+  const fakeTimers = () => {
+    const pending: (() => void)[] = []
+    const delays: number[] = []
+    return {
+      pending,
+      delays,
+      scheduler: {
+        set: (fn: () => void, ms: number) => {
+          delays.push(ms)
+          return pending.push(fn)
+        },
+        clear: (handle: unknown) => void pending.splice(Number(handle) - 1, 1),
+      },
+      fire: () => pending.splice(0).forEach((fn) => fn()),
+    }
+  }
+  test("many requests before the timer fires rebuild once", () => {
+    const timers = fakeTimers()
+    let rebuilds = 0
+    const batch = createRefreshBatch({ run: () => rebuilds++, scheduler: timers.scheduler })
+    batch.request()
+    batch.request()
+    batch.request()
+    timers.fire()
+    batch.request()
+    timers.fire()
+    expect(rebuilds).toBe(2)
+  })
+  test("waits 100 ms, so a burst of events is one rebuild", () => {
+    const timers = fakeTimers()
+    createRefreshBatch({ run: () => {}, scheduler: timers.scheduler }).request()
+    expect([timers.delays, REFRESH_BATCH_MS]).toEqual([[100], 100])
+  })
+  test("a request after dispose sets no timer", () => {
+    const timers = fakeTimers()
+    const batch = createRefreshBatch({ run: () => {}, scheduler: timers.scheduler })
+    batch.dispose()
+    batch.request()
+    expect(timers.pending).toHaveLength(0)
+  })
+  test("dispose drops a request that is still waiting", () => {
+    const timers = fakeTimers()
+    let rebuilds = 0
+    const batch = createRefreshBatch({ run: () => rebuilds++, scheduler: timers.scheduler })
+    batch.request()
+    batch.dispose()
+    timers.fire()
+    expect(rebuilds).toBe(0)
   })
 })

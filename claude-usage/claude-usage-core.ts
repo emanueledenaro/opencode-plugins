@@ -680,15 +680,13 @@ export type Scheduler = { set: (fn: () => void, ms: number) => unknown; clear: (
 
 /**
  * Turns a stream of measured widths into few updates: the first real size is applied at once, later
- * ones are coalesced to one update per `delayMs`, and a size that is already shown does nothing.
+ * ones are coalesced to one update per RESIZE_COALESCE_MS, and a size that is already shown does nothing.
  */
 export function createWidthTracker(options: {
   initial: number
   onChange: (width: number) => void
-  delayMs?: number
   scheduler?: Scheduler
 }) {
-  const delay = options.delayMs ?? RESIZE_COALESCE_MS
   const scheduler: Scheduler = options.scheduler ?? {
     set: (fn, ms) => setTimeout(fn, ms),
     clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
@@ -717,12 +715,46 @@ export function createWidthTracker(options: {
         flush()
         return
       }
-      if (handle === undefined) handle = scheduler.set(flush, delay)
+      if (handle === undefined) handle = scheduler.set(flush, RESIZE_COALESCE_MS)
     },
     dispose() {
       disposed = true
       if (handle !== undefined) scheduler.clear(handle)
       handle = undefined
+    },
+  }
+}
+
+/**
+ * Listens to "resize" on exactly the nodes last passed to `follow`: new ones are added and nodes that left
+ * are let go, so a node the host swapped out of the row is not kept alive. `dispose` lets go of all of them
+ * and is final: a later `follow` does nothing.
+ * Keep identical in token-rate-core.ts and claude-usage-core.ts: copies.test.ts at the root compares them.
+ */
+export function createResizeWatch(onResize: () => void) {
+  type Resizable = { on: (event: string, listener: () => void) => unknown; off?: (event: string, listener: () => void) => unknown }
+  const isResizable = (node: unknown): node is Resizable => typeof (node as { on?: unknown } | null)?.on === "function"
+  const watched = new Set<Resizable>()
+  let disposed = false
+  return {
+    follow(nodes: readonly unknown[]) {
+      if (disposed) return // a measure queued before cleanup may still call this
+      const current = new Set(nodes.filter(isResizable))
+      for (const node of watched) {
+        if (current.has(node)) continue
+        node.off?.("resize", onResize)
+        watched.delete(node)
+      }
+      for (const node of current) {
+        if (watched.has(node)) continue
+        node.on("resize", onResize)
+        watched.add(node)
+      }
+    },
+    dispose() {
+      disposed = true
+      for (const node of watched) node.off?.("resize", onResize)
+      watched.clear()
     },
   }
 }

@@ -44,15 +44,16 @@ Senza commento l'allegato contiene solo il testo citato. La descrizione dell'all
 
 Il campo di scrittura non invia un messaggio vuoto, per questo l'invio delle sole citazioni ha un tasto suo. Tutti i comandi sono anche nella palette (`ctrl+p`).
 
-`ctrl+y` e `alt+y` non sono usati da nessun comando di OpenCode 2.2. `alt` richiede che il terminale mandi Option come Meta; se non lo fa, usa il clic o il comando.
+`ctrl+y` e `alt+y` non sono usati da nessun comando di OpenCode (controllato sulla versione indicata nel README principale). `alt` richiede che il terminale mandi Option come Meta; se non lo fa, usa il clic o il comando.
 
 ## Come passa la citazione
 
 La parte TUI e la parte server possono girare in processi diversi, quindi si parlano con un file per sessione:
 
-`~/.local/state/opencode/quote-pending/<sessionID>.json` (oppure `$XDG_STATE_HOME/opencode/quote-pending/`): cartella 0700, file 0600, scritto in modo atomico, link simbolici rifiutati.
+`~/.local/state/opencode/quote-pending/<sessionID>.json` (oppure `$XDG_STATE_HOME/opencode/quote-pending/`): cartella 0700, file 0600, scritto in modo atomico, link simbolici rifiutati. Una pipe al posto del file si apre senza attendere e viene scartata, quindi non blocca lo schermo.
 
 - Il TUI lo scrive quando salvi il commento e lo cancella quando togli l'ultima citazione rimasta.
+- Il TUI controlla la cartella ogni secondo, ma rilegge i file solo se la scatola mostra citazioni, se la cartella è cambiata, se hai cambiato sessione, oppure ogni 10 secondi. Così una citazione aggiunta da un'altra finestra di OpenCode compare al più tardi dopo 10 secondi, o subito quando apri quella sessione.
 - Il file tiene la lista delle citazioni, ognuna con testo e commento (versione 3). I file vecchi si leggono ancora: la versione 2 (lista di testi) e la versione 1 (un solo testo) diventano citazioni senza commento.
 - Il server ha un hook sul prompt: legge solo il file della sessione del messaggio, aggiunge gli allegati e cancella il file (si usa una volta sola).
 - La scadenza è 1 ora dall'ultima aggiunta: i file più vecchi vengono ignorati e cancellati.
@@ -75,3 +76,4 @@ Se qualcosa va storto, l'hook salta gli allegati e lascia il messaggio com'è: n
 - `index.ts` parte server (l'hook).
 - `tui.tsx` parte TUI (avviso, finestra del commento, tasti, scatola).
 - `quote-core.test.ts` test: `bun test`.
+- `quote-io.test.ts` test del file system, in una cartella temporanea.

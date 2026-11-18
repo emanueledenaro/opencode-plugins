@@ -12,6 +12,8 @@ import {
   footerWidth,
   visibleColumns,
   createRateTracker,
+  createResizeWatch,
+  createShrinkHold,
   createThroughputCollector,
   dedupeMeasurements,
   formatModelDetail,
@@ -178,6 +180,36 @@ describe("createRateTracker", () => {
     tracker.textDelta({ sessionID: "ses_b", messageID: "msg_1", ordinal: 0, at: 5_000 })
     expect(tracker.stepEnded({ sessionID: "ses_a", messageID: "msg_1", outputTokens: 40 })?.tokensPerSecond).toBe(40)
     expect(tracker.stepEnded({ sessionID: "ses_b", messageID: "msg_1", outputTokens: 40 })?.tokensPerSecond).toBe(10)
+  })
+
+  test("an interrupted session forgets its open step: a late end gives no rate", () => {
+    const tracker = createRateTracker()
+    tracker.stepStarted(started)
+    tracker.textDelta({ sessionID: "ses_1", messageID: "msg_1", ordinal: 0, at: 1_500 })
+    tracker.textDelta({ sessionID: "ses_1", messageID: "msg_1", ordinal: 0, at: 2_500 })
+    tracker.endSession("ses_1")
+    expect(tracker.stepEnded({ sessionID: "ses_1", messageID: "msg_1", outputTokens: 50 })).toBeUndefined()
+  })
+
+  test("an interrupted session forgets its deltas: a new step with the same id is measured on its own", () => {
+    const tracker = createRateTracker()
+    tracker.stepStarted(started)
+    tracker.textDelta({ sessionID: "ses_1", messageID: "msg_1", ordinal: 0, at: 1_500 })
+    tracker.endSession("ses_1")
+    tracker.stepStarted({ ...started, startedAt: 10_000 })
+    tracker.textDelta({ sessionID: "ses_1", messageID: "msg_1", ordinal: 0, at: 10_100 })
+    tracker.textDelta({ sessionID: "ses_1", messageID: "msg_1", ordinal: 0, at: 11_100 })
+    expect(tracker.stepEnded({ sessionID: "ses_1", messageID: "msg_1", outputTokens: 20 })?.generationMs).toBe(1_000)
+  })
+
+  test("ending one session leaves the open steps of the others alone", () => {
+    const tracker = createRateTracker()
+    tracker.stepStarted({ ...started, sessionID: "ses_a" })
+    tracker.stepStarted({ ...started, sessionID: "ses_b" })
+    tracker.textDelta({ sessionID: "ses_b", messageID: "msg_1", ordinal: 0, at: 1_000 })
+    tracker.endSession("ses_a")
+    tracker.textDelta({ sessionID: "ses_b", messageID: "msg_1", ordinal: 0, at: 2_000 })
+    expect(tracker.stepEnded({ sessionID: "ses_b", messageID: "msg_1", outputTokens: 40 })?.tokensPerSecond).toBe(40)
   })
 })
 
@@ -1073,5 +1105,127 @@ describe("contentWidth", () => {
   })
   test("is never negative", () => {
     expect(contentWidth(box(10, 50, [box(2, 3)]))).toBe(0)
+  })
+})
+
+describe("createResizeWatch", () => {
+  // A stand-in for an OpenTUI node: it records its resize listeners (a listener added twice counts twice,
+  // as on an EventEmitter) and can fire them.
+  const fakeNode = () => {
+    const listeners: (() => void)[] = []
+    return {
+      get listeners() {
+        return { size: listeners.length }
+      },
+      on: (event: string, fn: () => void) => void (event === "resize" && listeners.push(fn)),
+      off: (event: string, fn: () => void) => {
+        const at = event === "resize" ? listeners.indexOf(fn) : -1
+        if (at !== -1) listeners.splice(at, 1)
+      },
+      resize: () => [...listeners].forEach((fn) => fn()),
+    }
+  }
+
+  test("a resize of any followed node calls back; following again adds no second listener", () => {
+    let calls = 0
+    const row = fakeNode()
+    const path = fakeNode()
+    const watch = createResizeWatch(() => calls++)
+    watch.follow([row, path])
+    watch.follow([row, path])
+    row.resize()
+    path.resize()
+    expect([calls, row.listeners.size, path.listeners.size]).toEqual([2, 1, 1])
+  })
+
+  test("a node that left the row is let go, a new one is followed", () => {
+    let calls = 0
+    const gone = fakeNode()
+    const fresh = fakeNode()
+    const watch = createResizeWatch(() => calls++)
+    watch.follow([gone])
+    watch.follow([fresh, { width: 3 }, null])
+    gone.resize()
+    fresh.resize()
+    expect([calls, gone.listeners.size, fresh.listeners.size]).toEqual([1, 0, 1])
+  })
+
+  test("dispose lets go of every node", () => {
+    const row = fakeNode()
+    const watch = createResizeWatch(() => {})
+    watch.follow([row])
+    watch.dispose()
+    expect(row.listeners.size).toBe(0)
+  })
+
+  test("follow after dispose adds nothing: a measure queued before cleanup cannot listen again", () => {
+    const row = fakeNode()
+    const watch = createResizeWatch(() => {})
+    watch.follow([row])
+    watch.dispose()
+    watch.follow([row])
+    expect(row.listeners.size).toBe(0)
+  })
+})
+
+describe("createShrinkHold", () => {
+  const box = (flexShrink: unknown = 1) => ({ flexShrink, isDestroyed: false })
+
+  test("raises the held node's shrink and puts the old value back on release", () => {
+    const hold = createShrinkHold(50)
+    const status = box()
+    hold.hold(status)
+    const raised = status.flexShrink
+    hold.release()
+    expect([raised, status.flexShrink]).toEqual([50, 1])
+  })
+
+  test("holding the same node again writes nothing, so a new measure does not cause a new layout", () => {
+    let writes = 0
+    let value: unknown = 1
+    const status = {
+      isDestroyed: false,
+      get flexShrink() {
+        return value
+      },
+      set flexShrink(next: unknown) {
+        writes++
+        value = next
+      },
+    }
+    const hold = createShrinkHold(50)
+    hold.hold(status)
+    hold.hold(status)
+    expect([writes, status.flexShrink]).toEqual([1, 50])
+  })
+
+  test("holding another node puts the first one back to its own value", () => {
+    const hold = createShrinkHold(50)
+    const first = box(3)
+    const second = box()
+    hold.hold(first)
+    hold.hold(second)
+    expect([first.flexShrink, second.flexShrink]).toEqual([3, 50])
+  })
+
+  test("dispose puts the value back, and a hold after it writes nothing", () => {
+    const hold = createShrinkHold(50)
+    const status = box(3)
+    hold.hold(status)
+    hold.dispose()
+    hold.hold(status)
+    expect(status.flexShrink).toBe(3)
+  })
+
+  test("a node without flexShrink, or one already destroyed, is not written", () => {
+    const hold = createShrinkHold(50)
+    const plain: Record<string, unknown> = {}
+    hold.hold(plain)
+    const gone = box()
+    hold.hold(gone)
+    gone.isDestroyed = true
+    hold.release()
+    hold.release()
+    expect([plain, gone.flexShrink]).toEqual([{}, 50])
   })
 })

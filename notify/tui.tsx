@@ -1,6 +1,6 @@
 // TUI part of the notify plugin (OpenCode 2 plugin API, docs: /build/plugins/cli).
 // A macOS notification and a short sound, only when the terminal is not focused, when the main session
-// finishes a reply, a permission is asked or a form/question waits for you. At most one every 20 seconds;
+// finishes or fails a reply, a permission is asked or a form/question waits for you. At most one every 20 seconds;
 // a permission or question that meets the 20 seconds pings when they end.
 // The rules are in ./notify-core.ts (tested), see ./README.md.
 import { Plugin } from "@opencode/plugin/tui"
@@ -60,6 +60,8 @@ export default Plugin.define({
 
     const stops = [
       context.data.on("session.execution.succeeded", (event) => send("done", sessionOf(event))),
+      // A run you stop with Esc is "session.execution.interrupted", which stays silent.
+      context.data.on("session.execution.failed", (event) => send("failed", sessionOf(event))),
       context.data.on("permission.asked", (event) => {
         const data = (event as { data?: { id?: string; sessionID?: string } }).data
         if (!data?.id || !seenPermissions.claim(data.id)) return

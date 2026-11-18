@@ -9,6 +9,7 @@ import {
   MAX_QUOTES,
   addPending,
   clearPending,
+  createSyncGate,
   createWidthTracker,
   dialogPreview,
   hintLine,
@@ -23,7 +24,7 @@ import {
   type PendingQuote,
   type Selection,
 } from "./quote-core.ts"
-import { createPendingFs, sweepExpired } from "./quote-io.ts"
+import { createPendingFs, folderStamp, sweepExpired } from "./quote-io.ts"
 
 const QUOTE_KEY = "ctrl+y"
 const REMOVE_KEY = "alt+y"
@@ -235,9 +236,13 @@ export default Plugin.define({
     }))
 
     // The server consumes the file when the message is sent; this keeps the box in step with the file.
+    // With no list shown it reads only when the folder or the current session changed, or every 10 s.
+    const syncGate = createSyncGate()
     const timer = setInterval(() => {
-      const current = currentSessionID()
       const known = Object.keys(quotes())
+      const current = currentSessionID()
+      const look = { stamp: folderStamp(fs), session: current, listShown: known.length > 0, now: Date.now() }
+      if (!syncGate.tick(look)) return
       // Also the current session, so a quote added in another OpenCode window shows here too.
       for (const sessionID of current && !known.includes(current) ? [...known, current] : known) {
         refresh(sessionID)

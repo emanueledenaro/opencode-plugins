@@ -36,9 +36,9 @@ The footer row is shared with the path, claude-usage, the context figure and Ope
 2. rate only: `42 tok/s`
 3. nothing
 
-It never wraps and never pushes a neighbour. It follows a live zoom of the terminal: resizes are measured on the row and on each item in it, a shrink applies at once, growth waits 60 ms so a burst of resizes lands as one change, and a width that has not changed does no work at all. Timers and listeners are removed when the plugin unloads.
+It never wraps and never pushes a neighbour. It follows a live zoom of the terminal: resizes are measured on the row and on each item in it (an item the host takes out of the row is let go), a shrink applies at once, growth waits 60 ms so a burst of resizes lands as one change, and a width that has not changed does no work at all. Timers and listeners are removed when the plugin unloads.
 
-What this relies on in OpenCode 2.2.6, checked in the binary: the prompt footer row has a gap of 2 between items, and its first item is stretched to fill the row. Idle it holds the working-directory path, which truncates itself: the footer counts only 12 cells of it as used, and tells the path box to take the whole cut when the row is too full (its `flexShrink` is raised, and put back on unload). Without that, flexbox would take cells from every item in proportion and claude-usage would lose a meter cell. While a reply streams, that first item holds OpenCode's own "esc interrupt" hint instead. The hint is never cut: the footer counts its full content width (the right-most edge of what is inside it), so on a narrow terminal the footer drops its sparkline, then its rate, before the hint loses a letter. It measures again when a reply starts or ends, because the first item changes then. If a later OpenCode changes the row, the footer measures wrongly and at worst hides itself; the numbers are not affected.
+What this relies on in OpenCode, checked in the binary (the root README says which version; `check-host.ts` there checks the path id): the prompt footer row has a gap of 2 between items, and its first item is stretched to fill the row. Idle it holds the working-directory path, which truncates itself: the footer counts only 12 cells of it as used, and tells the path box to take the whole cut when the row is too full (its `flexShrink` is raised while it holds the path, and put back while a reply streams and on unload). Without that, flexbox would take cells from every item in proportion and claude-usage would lose a meter cell. While a reply streams, that first item holds OpenCode's own "esc interrupt" hint instead. The hint is never cut: the footer counts its full content width (the right-most edge of what is inside it), so on a narrow terminal the footer drops its sparkline, then its rate, before the hint loses a letter. It measures again when a reply starts or ends, because the first item changes then. If a later OpenCode changes the row, the footer measures wrongly and at worst hides itself; the numbers are not affected.
 
 ## /velocita
 
@@ -57,7 +57,7 @@ Every measurement is appended as one JSON line to:
 
 `$XDG_STATE_HOME/opencode/token-rate.jsonl` (default `~/.local/state/opencode/token-rate.jsonl`, the same file and format the old plugin wrote)
 
-Fields: `timestamp`, `sessionID`, `messageID`, `providerID`, `modelID`, `outputTokens`, `timeToFirstTokenMs`, `generationMs`, `tokensPerSecond`. No prompt or reply text. The file grows by about 250 bytes per reply; delete it any time. Set `TOKEN_RATE_LOG=off` to stop writing it.
+Fields: `timestamp`, `sessionID`, `messageID`, `providerID`, `modelID`, `outputTokens`, `timeToFirstTokenMs`, `generationMs`, `tokensPerSecond`. No prompt or reply text. The file grows by about 250 bytes per reply; delete it any time. Set `TOKEN_RATE_LOG=off` to stop writing it. Past 4 MB the log moves to `token-rate.jsonl.1` (one old file is kept). Within one OpenCode window lines are appended one at a time, so two replies that end together at that point keep both lines and the old file. Two windows rotating at the same moment can still lose a line.
 
 Reading is careful: the file is opened with `O_NOFOLLOW` (a symlink in its place is refused), only the last 1 MB is read (about 4000 replies, the first line of that tail is dropped as it may be cut), and it happens once at start for the colour rule and once each time the dialog opens, never per frame. A missing or unreadable log just means no history. A reply logged twice by two open windows counts once.
 
@@ -69,7 +69,7 @@ bun token-rate-report.ts --average 20
 
 ## Install
 
-Needs OpenCode 2.2 or later.
+Needs OpenCode 2 (the root README says which version was last checked).
 
 ```sh
 git clone https://github.com/emanueledenaro/opencode-plugins ~/opencode-plugins
@@ -88,7 +88,7 @@ Colours come from the active theme (`text.faint`, `text.muted`, `text.base`, `te
 ## Files
 
 - `token-rate-core.ts`: pure logic (the collector, the event tracker, sparkline, colour rule, live estimate, footer steps, width settling, dialog rows and columns, Italian formatting, log parsing).
-- `token-rate-log.ts`: the disk side: log path, append, tail read.
+- `token-rate-log.ts`: the disk side: log path, append (one at a time), tail read.
 - `tui.tsx`: event listeners, the footer, the dialog, resize measuring.
 - `token-rate-report.ts`: the log summary script.
 - `index.ts`: an empty server part, so OpenCode loads the directory.

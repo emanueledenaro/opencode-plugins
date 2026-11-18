@@ -7,6 +7,7 @@ import { ErrorBoundary, For, Show, createEffect, createMemo, createSignal, onCle
 import {
   DEFAULT_WIDTH,
   buildView,
+  createRefreshBatch,
   createRunTracker,
   createWidthTracker,
   rowLayout,
@@ -34,7 +35,15 @@ export default Plugin.define({
     const [runs, setRuns] = createSignal(tracker.snapshot())
     const [now, setNow] = createSignal(Date.now())
     const [frame, setFrame] = createSignal(0)
-    const refresh = () => setRuns(tracker.snapshot())
+    // Events of every session ask for a rebuild; a burst of them is one rebuild.
+    const batch = createRefreshBatch({
+      run: () => setRuns(tracker.snapshot()),
+      scheduler: {
+        set: (fn, ms) => setTimeout(fn, ms),
+        clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+      },
+    })
+    const refresh = () => batch.request()
     const at = (event: unknown) => {
       const created = (event as { created?: unknown } | undefined)?.created
       return typeof created === "number" ? created : Date.now()
@@ -276,6 +285,7 @@ export default Plugin.define({
       if (spinTimer) clearInterval(spinTimer)
       spinTimer = undefined
       stops.forEach((stop) => stop())
+      batch.dispose()
       unregister()
     }
   },
