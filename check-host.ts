@@ -5,7 +5,8 @@
 //
 //   bun check-host.ts [path to the opencode binary, default ~/.opencode/bin/opencode]
 //
-// Read only: it reads the binary and prints what is missing. It exits 1 when a name is missing.
+// Read only: it reads the binary and prints what is missing. Exit 0: every name is there. Exit 1: a name is
+// missing. Exit 2: the binary cannot be read.
 import { homedir } from "node:os"
 import { join } from "node:path"
 
@@ -66,9 +67,20 @@ export function missingNames(binary: string): string[] {
   ]
 }
 
+/** The binary as latin1 text, or undefined after printing one line on why it cannot be read. */
+async function readBinary(path: string): Promise<string | undefined> {
+  try {
+    return Buffer.from(await Bun.file(path).arrayBuffer()).toString("latin1")
+  } catch (error) {
+    console.error(`cannot read ${path}: ${(error as NodeJS.ErrnoException).code ?? String(error)}`)
+    return undefined
+  }
+}
+
 if (import.meta.main) {
   const path = process.argv[2] ?? join(homedir(), ".opencode", "bin", "opencode")
-  const binary = Buffer.from(await Bun.file(path).arrayBuffer()).toString("latin1")
+  const binary = await readBinary(path)
+  if (binary === undefined) process.exit(2)
   const missing = missingNames(binary)
   const total = HOST_NAMES.quoted.length + HOST_NAMES.bare.length + HOST_NAMES.sounds.length
   if (missing.length === 0) {
