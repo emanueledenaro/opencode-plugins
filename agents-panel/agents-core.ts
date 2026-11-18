@@ -20,7 +20,8 @@ const DETAIL_INDENT = " ".repeat(11)
 const COMPACT_INDENT = "  "
 const NAME_GAP = 2
 
-export const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+// Quadrant blocks, as token-rate uses: SF Mono and Menlo have them, they have no braille patterns.
+export const SPINNER_FRAMES = ["▘", "▝", "▗", "▖"]
 
 export type Outcome = "done" | "error" | "stopped"
 export type ModelKey = "opus" | "sonnet" | "haiku" | "fable" | "other"
@@ -129,7 +130,7 @@ const DEFAULT_TITLE = /^(Child|New) session - /
 export function displayTitle(title: string | undefined, max: number): string {
   const text = (title ?? "").replace(/\s+/g, " ").trim()
   if (text === "" || DEFAULT_TITLE.test(text)) return "Subagente"
-  return text.length > max ? `${text.slice(0, max - 1)}…` : text
+  return fit(text, max) // counts characters, so an emoji is never cut in half
 }
 
 /** Short title of one tool call, from the tool name and its input. Undefined without a tool name. */
@@ -294,6 +295,30 @@ export function buildView(children: ChildInput[], runs: Record<string, Run>, now
 }
 
 export type Scheduler = { set: (fn: () => void, ms: number) => unknown; clear: (handle: unknown) => void }
+
+/** How long the panel waits to rebuild after an event, so a burst of events is one rebuild. */
+export const REFRESH_BATCH_MS = 100
+
+/**
+ * Many `request` calls before the timer fires run `run` once. Events of every session (step starts, tool
+ * calls) ask for a rebuild, so a busy subagent would otherwise rebuild the snapshot many times a second.
+ */
+export function createRefreshBatch(options: { run: () => void; scheduler: Scheduler; delayMs?: number }) {
+  let handle: unknown
+  return {
+    request() {
+      if (handle !== undefined) return
+      handle = options.scheduler.set(() => {
+        handle = undefined
+        options.run()
+      }, options.delayMs ?? REFRESH_BATCH_MS)
+    },
+    dispose() {
+      if (handle !== undefined) options.scheduler.clear(handle)
+      handle = undefined
+    },
+  }
+}
 
 /**
  * Turns a stream of measured widths into few updates: the first real size is applied at once, later
