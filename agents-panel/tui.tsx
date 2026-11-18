@@ -1,11 +1,13 @@
 // TUI part of the agents-panel plugin (OpenCode 2 plugin API, docs: /build/plugins/cli).
 // Lists the background subagents (child sessions) of the session you are looking at in the sidebar,
-// in three groups: waiting for you, working, finished. Read only; a click opens the child session.
+// in three groups: waiting for you, working, finished. Nothing is drawn while the session has none.
+// Read only; a click opens the child session.
 // The layout logic is in ./agents-core.ts (tested), see ./README.md.
 import { Plugin } from "@opencode/plugin/tui"
 import { ErrorBoundary, For, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import {
   DEFAULT_WIDTH,
+  MODEL_HUES,
   buildView,
   createRefreshBatch,
   createRunTracker,
@@ -20,6 +22,7 @@ import {
 
 const CLOCK_MS = 5_000
 const SPIN_MS = 140
+const BOLD = 1
 const DIM = 2
 
 // The one thing read from the OpenTUI box: its own width, as OpenCode's own footer does.
@@ -48,8 +51,25 @@ export default Plugin.define({
       const created = (event as { created?: unknown } | undefined)?.created
       return typeof created === "number" ? created : Date.now()
     }
-    type Data = { sessionID?: string; id?: string; name?: string; input?: unknown; model?: { id?: string } }
+    type Data = {
+      sessionID?: string
+      id?: string
+      requestID?: string
+      name?: string
+      input?: unknown
+      model?: { id?: string }
+      form?: { id?: string; sessionID?: string }
+    }
     const dataOf = (event: unknown) => (event as { data?: Data } | undefined)?.data
+    // A permission and a form can share an id, so each request is named with its kind.
+    const permissionKey = (id: string) => `permission:${id}`
+    const formKey = (id: string) => `form:${id}`
+    const formAnswered = (event: unknown) => {
+      const id = dataOf(event)?.id
+      if (!id) return
+      tracker.answered(formKey(id))
+      refresh()
+    }
 
     // Tool calls are announced by name first and by input second; keep the name until the input comes.
     const toolNames = new Map<string, string>()
@@ -104,6 +124,27 @@ export default Plugin.define({
         tracker.tool(data.sessionID, detail)
         refresh()
       }),
+      // When a permission or a question was asked is the start of the time shown under "Ti aspetta".
+      context.data.on("permission.asked", (event) => {
+        const data = dataOf(event)
+        if (!data?.id || !data.sessionID) return
+        tracker.asked(data.sessionID, permissionKey(data.id), at(event))
+        refresh()
+      }),
+      context.data.on("permission.replied", (event) => {
+        const requestID = dataOf(event)?.requestID
+        if (!requestID) return
+        tracker.answered(permissionKey(requestID))
+        refresh()
+      }),
+      context.data.on("form.created", (event) => {
+        const form = dataOf(event)?.form
+        if (!form?.id || !form.sessionID) return
+        tracker.asked(form.sessionID, formKey(form.id), at(event))
+        refresh()
+      }),
+      context.data.on("form.replied", formAnswered),
+      context.data.on("form.cancelled", formAnswered),
       context.data.on("session.deleted", (event) => {
         const id = dataOf(event)?.sessionID
         if (!id) return
@@ -160,16 +201,9 @@ export default Plugin.define({
       if (kind === "working") return palette().hue?.accent?.[200] ?? theme.text.action?.primary?.base ?? theme.text.base
       return theme.text.feedback.success?.base ?? theme.text.muted
     }
-    // One fixed hue per model family, so the same model has the same colour in every theme.
-    const MODEL_HUE: Record<ModelKey, { hue: string; slot: number } | undefined> = {
-      opus: { hue: "blue", slot: 0 },
-      sonnet: { hue: "cyan", slot: 1 },
-      haiku: { hue: "orange", slot: 3 },
-      fable: { hue: "purple", slot: 1 },
-      other: undefined,
-    }
+    // One fixed hue per model family (MODEL_HUES), never a hue that means a state in this panel.
     const modelColour = (key: ModelKey) => {
-      const pick = MODEL_HUE[key]
+      const pick = MODEL_HUES[key]
       if (!pick) return theme.text.base
       return palette().hue?.[pick.hue]?.[200] ?? palette().categorical?.[pick.slot]?.[200] ?? theme.text.base
     }
@@ -191,25 +225,28 @@ export default Plugin.define({
         tracker.dispose()
         if (box) box.onSizeChange = undefined
       })
+      // No subagent, no panel: a session without subagents keeps its sidebar rows for something else.
       return (
-        <box
-          flexDirection="column"
-          width="100%"
-          gap={1}
-          ref={(el: Measured) => {
-            box = el
-            el.onSizeChange = () => tracker.report(el.width)
-            queueMicrotask(() => tracker.report(el.width))
-          }}
-        >
-          <Show
-            when={!view().empty}
-            fallback={<text fg={theme.text.faint} wrapMode="none">{view().emptyText}</text>}
+        <Show when={!view().empty}>
+          <box
+            flexDirection="column"
+            width="100%"
+            gap={1}
+            ref={(el: Measured) => {
+              box = el
+              el.onSizeChange = () => tracker.report(el.width)
+              queueMicrotask(() => tracker.report(el.width))
+            }}
           >
             <box flexDirection="row" justifyContent="space-between">
-              <text fg={theme.text.muted} wrapMode="none">{view().header.title}</text>
-              <Show when={view().header.count !== ""}>
-                <text fg={theme.text.muted} wrapMode="none">{view().header.count.trim()}</text>
+              <text fg={theme.text.base} attributes={BOLD} wrapMode="none">{view().header.title}</text>
+              <Show when={view().header.state !== ""}>
+                <text
+                  fg={view().header.stateKind === "waiting" ? groupColour("waiting") : theme.text.muted}
+                  wrapMode="none"
+                >
+                  {view().header.state.trim()}
+                </text>
               </Show>
             </box>
             <For each={view().groups}>
@@ -266,15 +303,15 @@ export default Plugin.define({
             <Show when={view().hidden > 0}>
               <text fg={theme.text.faint} wrapMode="none">{view().hiddenText}</text>
             </Show>
-          </Show>
-        </box>
+          </box>
+        </Show>
       )
     }
 
     const unregister = context.ui.slot({
       append: "sidebar.content",
       render: (input: { sessionID: string }) => (
-        <ErrorBoundary fallback={<text fg={theme.text.feedback?.warning?.base ?? theme.text.faint}>{"Subagenti: errore di visualizzazione"}</text>}>
+        <ErrorBoundary fallback={<text fg={theme.text.faint}>{"Subagenti: non disponibile"}</text>}>
           <Panel sessionID={input.sessionID} />
         </ErrorBoundary>
       ),

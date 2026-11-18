@@ -19,6 +19,8 @@ const MODEL_COLUMN = 9
 const DETAIL_INDENT = " ".repeat(11)
 const COMPACT_INDENT = "  "
 const NAME_GAP = 2
+/** A time that would leave the name fewer characters than this is left out: the name says who it is. */
+const NAME_MIN = 4
 
 // Quadrant blocks, as token-rate uses: SF Mono and Menlo have them, they have no braille patterns.
 export const SPINNER_FRAMES = ["▘", "▝", "▗", "▖"]
@@ -49,6 +51,8 @@ export type Run = {
   modelId?: string
   /** Short title of the latest tool call of the current run. */
   tool?: string
+  /** When the oldest permission or question still open was asked: how long the agent has waited for you. */
+  waitingSince?: number
 }
 
 export type ViewRow = {
@@ -68,30 +72,48 @@ export type ViewRow = {
 
 export type ViewGroup = { kind: GroupKind; icon: string; title: string; rows: ViewRow[] }
 
+/** What the header says on its right edge: who waits for you, else who works. */
+export type HeaderState = { text: string; kind: "waiting" | "working" }
+
 export type View = {
+  /** No subagent at all: the panel draws nothing. */
   empty: boolean
-  emptyText: string
-  header: { title: string; count: string }
+  /** `state` is padded on the left so that `title + state` is the whole line; "" when it does not fit. */
+  header: { title: string; state: string; stateKind?: HeaderState["kind"] }
   groups: ViewGroup[]
   /** Active rows that did not fit in MAX_ROWS. */
   hidden: number
   hiddenText: string
 }
 
-const SECOND = 1_000
-const MINUTE = 60 * SECOND
-const HOUR = 60 * MINUTE
-const DAY = 24 * HOUR
+/**
+ * A span of time the way every panel shows it: "<1m", "12m", "1h 5m", "2g 3h". At most two units, the
+ * smaller one left out when it is 0. A negative or unusable span reads as "<1m".
+ * Keep identical in every core that has it: copies.test.ts at the root lists and compares them.
+ */
+export function relativeIt(ms: number): string {
+  const minutes = Number.isFinite(ms) && ms > 0 ? Math.floor(ms / 60_000) : 0
+  if (minutes < 1) return "<1m"
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return minutes % 60 === 0 ? `${hours}h` : `${hours}h ${minutes % 60}m`
+  const days = Math.floor(hours / 24)
+  return hours % 24 === 0 ? `${days}g` : `${days}g ${hours % 24}h`
+}
 
-/** "40s", "12m", "2h", "1g", and " fa" after it for a finished run. */
-export function clockIt(ms: number, finished: boolean): string {
-  const gap = ms > 0 ? ms : 0
-  let text: string
-  if (gap < MINUTE) text = `${Math.floor(gap / SECOND)}s`
-  else if (gap < HOUR) text = `${Math.floor(gap / MINUTE)}m`
-  else if (gap < DAY) text = `${Math.floor(gap / HOUR)}h`
-  else text = `${Math.floor(gap / DAY)}g`
-  return finished ? `${text} fa` : text
+/** The time on a row: "12m" for an agent at work, "3m fa" for a finished one, "da 2m" for one that waits for you. */
+export function rowTime(gapMs: number, kind: GroupKind): string {
+  const span = relativeIt(gapMs)
+  if (kind === "done") return `${span} fa`
+  return kind === "waiting" ? `da ${span}` : span
+}
+
+/** Text on one line and without control characters (escape codes, bells), so it never moves the cursor. */
+export function oneLine(text: string): string {
+  return text
+    .replace(/\s+/g, " ")
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, "")
+    .trim()
 }
 
 /** Cuts text to `width` characters, ending with "…" when it was longer. */
@@ -124,22 +146,40 @@ export function shortModel(id: string | undefined): { label: string; key: ModelK
   return { label: cut[0].toUpperCase() + cut.slice(1), key: "other" }
 }
 
+/** Theme hues that already mean a state in this panel: waits for you, finished, failed. */
+export const STATE_HUES: readonly string[] = ["orange", "green", "red"]
+
+/**
+ * One fixed theme hue per model family, so a model has the same colour in every theme; `slot` is the place
+ * in the theme's categorical palette used when it has no such hue. Never a hue of STATE_HUES.
+ */
+export const MODEL_HUES: Record<ModelKey, { hue: string; slot: number } | undefined> = {
+  opus: { hue: "blue", slot: 0 },
+  sonnet: { hue: "cyan", slot: 1 },
+  haiku: { hue: "yellow", slot: 3 },
+  fable: { hue: "purple", slot: 1 },
+  other: undefined,
+}
+
 const DEFAULT_TITLE = /^(Child|New) session - /
 
-/** One line, no default OpenCode title, at most `max` characters. */
+/** One line, no control characters, no default OpenCode title, at most `max` characters. */
 export function displayTitle(title: string | undefined, max: number): string {
-  const text = (title ?? "").replace(/\s+/g, " ").trim()
+  const text = oneLine(title ?? "")
   if (text === "" || DEFAULT_TITLE.test(text)) return "Subagente"
   return fit(text, max) // counts characters, so an emoji is never cut in half
 }
 
-/** Short title of one tool call, from the tool name and its input. Undefined without a tool name. */
+/**
+ * What an agent is doing, in Italian and without tool names, from one tool call: "legge agents-core.ts",
+ * "esegue make", "cerca nei file". Undefined without a tool name.
+ */
 export function toolDetail(name: string | undefined, input: unknown): string | undefined {
   if (typeof name !== "string" || name === "") return undefined
   const data = input !== null && typeof input === "object" ? (input as Record<string, unknown>) : {}
   const text = (key: string) => (typeof data[key] === "string" ? (data[key] as string).trim() : "")
-  const withName = (value: string) => (value === "" ? name : `${name} ${value}`)
   const base = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? ""
+  const onFile = (verb: string) => `${verb} ${base(text("path") || text("filePath")) || "un file"}`
   switch (name) {
     case "shell": {
       // Never the command line itself: it can carry a token or a password. The agent's own short
@@ -148,48 +188,71 @@ export function toolDetail(name: string | undefined, input: unknown): string | u
       if (description !== "") return description
       const words = text("command").split(/\s+/).filter((word) => word !== "" && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(word))
       const program = (words[0] === "sudo" || words[0] === "env" ? words[1] : words[0]) ?? ""
-      return base(program) || name
+      return `esegue ${base(program) || "un comando"}`
     }
     case "read":
+      return onFile("legge")
     case "edit":
+      return onFile("modifica")
     case "write":
-      return withName(base(text("path") || text("filePath")))
+      return onFile("scrive")
     case "grep":
     case "glob":
+      return "cerca nei file" // never the pattern: it can hold a pasted value
     case "websearch":
-      return name // patterns and queries can hold a pasted value
+      return "cerca sul web" // never the query, for the same reason
     case "subagent":
-      return text("description") || name
+      return text("description") || "avvia un subagente"
     case "webfetch": {
       try {
-        return withName(new URL(text("url")).host)
+        return `apre ${new URL(text("url")).host}`
       } catch {
-        return name
+        return "apre una pagina"
       }
     }
     case "skill":
-      return withName(text("id") || text("name"))
+      return `usa la skill ${text("id") || text("name")}`.trimEnd()
+    case "execute":
+      return "esegue uno script"
     default:
-      return name
+      return "usa uno strumento" // an unknown tool is not named: the name is the host's word, not the owner's
   }
 }
 
 export function createRunTracker() {
   const runs = new Map<string, Run>()
+  /** Permission and question requests still open, by request key: whose they are and when they were asked. */
+  const asks = new Map<string, { sessionID: string; at: number }>()
   /** Latest write wins the place; past MAX_RUNS the least recently written run is dropped. */
   const put = (id: string, run: Run) => {
     runs.delete(id)
     runs.set(id, run)
     if (runs.size > MAX_RUNS) runs.delete(runs.keys().next().value as string) // oldest first
   }
+  /** A run that starts or ends has no request open any more, whether or not its answer was seen. */
+  const dropAsksOf = (sessionID: string) => {
+    for (const [key, ask] of asks) if (ask.sessionID === sessionID) asks.delete(key)
+  }
   return {
     started(id: string, at: number) {
+      dropAsksOf(id)
       const modelId = runs.get(id)?.modelId
       put(id, modelId === undefined ? { startedAt: at } : { startedAt: at, modelId })
     },
     ended(id: string, outcome: Outcome, at: number) {
+      dropAsksOf(id)
       const { tool: _tool, ...rest } = runs.get(id) ?? {}
       put(id, { ...rest, endedAt: at, outcome })
+    },
+    /** A permission or a question was asked. `requestKey` names the request; asking it again keeps the first time. */
+    asked(sessionID: string, requestKey: string, at: number) {
+      if (asks.has(requestKey)) return
+      asks.set(requestKey, { sessionID, at })
+      if (asks.size > MAX_RUNS) asks.delete(asks.keys().next().value as string) // oldest first
+    },
+    /** The request was answered or withdrawn. */
+    answered(requestKey: string) {
+      asks.delete(requestKey)
     },
     model(id: string, modelId: string) {
       put(id, { ...runs.get(id), modelId })
@@ -201,10 +264,17 @@ export function createRunTracker() {
       return runs.get(id)
     },
     forget(id: string) {
+      dropAsksOf(id)
       runs.delete(id)
     },
+    /** Every run, each with `waitingSince` set to the time of its oldest open request. */
     snapshot(): Record<string, Run> {
-      return Object.fromEntries(runs)
+      const all: Record<string, Run> = Object.fromEntries(runs)
+      for (const ask of asks.values()) {
+        const since = all[ask.sessionID]?.waitingSince
+        if (since === undefined || ask.at < since) all[ask.sessionID] = { ...all[ask.sessionID], waitingSince: ask.at }
+      }
+      return all
     },
   }
 }
@@ -219,23 +289,32 @@ export function rowLayout(width: number): { showModel: boolean; showTime: boolea
   return { showModel: w >= MODEL_MIN_WIDTH, showTime: w >= TIME_MIN_WIDTH }
 }
 
+/** The moment a row's time counts from: the end for a finished agent, the request for a waiting one, else the start. */
+function timedFrom({ child, run }: Entry, kind: GroupKind): number | undefined {
+  if (kind === "done") return run?.endedAt ?? child.updatedAt
+  if (kind === "waiting") return run?.waitingSince
+  return run?.startedAt ?? child.createdAt
+}
+
 function makeRow(entry: Entry, kind: GroupKind, now: number, width: number): ViewRow {
   const { child, run } = entry
   const { showModel, showTime } = rowLayout(width)
   const model = shortModel(run?.modelId ?? child.modelId)
-  const finished = kind === "done"
-  const failed = finished && run?.outcome === "error"
-  const since = finished ? (run?.endedAt ?? child.updatedAt) : (run?.startedAt ?? child.createdAt)
-  const time = showTime ? clockIt(now - since, finished) : ""
+  const failed = kind === "done" && run?.outcome === "error"
+  const since = timedFrom(entry, kind)
+  const free = width - 2 - (showModel ? MODEL_COLUMN : 0)
+  // A wait whose start was not seen (asked before this window opened) shows no time: never a wrong one.
+  const wanted = showTime && since !== undefined ? rowTime(now - since, kind) : ""
+  const time = free - wanted.length - NAME_GAP >= NAME_MIN ? wanted : ""
   const mark = failed ? "✗ " : undefined
   const lead = `${mark ? "" : "  "}${showModel ? model.label.padEnd(MODEL_COLUMN) : ""}`
-  const room = Math.max(1, width - 2 - (showModel ? MODEL_COLUMN : 0) - time.length)
-  const title = fit(displayTitle(child.title, TITLE_MAX), showTime ? Math.max(1, room - NAME_GAP) : room)
-  const name = showTime ? title.padEnd(room) : title
+  const room = Math.max(1, free - time.length)
+  const title = fit(displayTitle(child.title, TITLE_MAX), time === "" ? room : Math.max(1, room - NAME_GAP))
+  const name = time === "" ? title : title.padEnd(room)
 
   let detailText: string | undefined
   if (kind === "waiting") detailText = child.permissionPending ? "chiede un permesso" : "ha una domanda"
-  else if (kind === "working") detailText = run?.tool
+  else if (kind === "working") detailText = run?.tool === undefined ? undefined : oneLine(run.tool)
   const indent = showModel ? DETAIL_INDENT : COMPACT_INDENT
   const detailRoom = width - indent.length - 2
   const detail = detailText && detailRoom >= 1 ? `${indent}└ ${fit(detailText, detailRoom)}` : undefined
@@ -244,14 +323,23 @@ function makeRow(entry: Entry, kind: GroupKind, now: number, width: number): Vie
 }
 
 const GROUPS: { kind: GroupKind; icon: string; title: string }[] = [
-  { kind: "waiting", icon: "⚠", title: "Ti aspetta" },
+  { kind: "waiting", icon: "!", title: "Ti aspetta" },
   { kind: "working", icon: "", title: "Al lavoro" },
   { kind: "done", icon: "✓", title: "Finiti" },
 ]
 
+const PANEL_TITLE = "Subagenti"
+
+/** The one fact for the header: how many wait for you, else how many work, else nothing. */
+export function headerState(waiting: number, working: number): HeaderState | undefined {
+  if (waiting > 0) return { text: waiting === 1 ? "1 ti aspetta" : `${waiting} ti aspettano`, kind: "waiting" }
+  if (working > 0) return { text: `${working} al lavoro`, kind: "working" }
+  return undefined
+}
+
 /**
- * The whole sidebar as data. Order: waiting, working (oldest first), the last MAX_FINISHED finished
- * (newest first). At most MAX_ROWS rows: active rows win, finished fill what is left.
+ * The whole sidebar as data. Order: waiting (longest wait first), working (oldest first), the last
+ * MAX_FINISHED finished (newest first). At most MAX_ROWS rows: active rows win, finished fill what is left.
  */
 export function buildView(children: ChildInput[], runs: Record<string, Run>, now: number, width: number): View {
   const w = usableWidth(width)
@@ -259,7 +347,8 @@ export function buildView(children: ChildInput[], runs: Record<string, Run>, now
   const startOf = (e: Entry) => e.run?.startedAt ?? e.child.createdAt
   const endOf = (e: Entry) => e.run?.endedAt ?? e.child.updatedAt
 
-  const waiting = entries.filter((e) => e.child.permissionPending || e.child.formPending).sort((a, b) => startOf(a) - startOf(b))
+  const askedAt = (e: Entry) => e.run?.waitingSince ?? startOf(e)
+  const waiting = entries.filter((e) => e.child.permissionPending || e.child.formPending).sort((a, b) => askedAt(a) - askedAt(b))
   const waitingIds = new Set(waiting.map((e) => e.child.id))
   const working = entries.filter((e) => !waitingIds.has(e.child.id) && e.child.running).sort((a, b) => startOf(a) - startOf(b))
   const activeIds = new Set([...waitingIds, ...working.map((e) => e.child.id)])
@@ -278,16 +367,14 @@ export function buildView(children: ChildInput[], runs: Record<string, Run>, now
     rows: byKind[g.kind].map((e) => makeRow(e, g.kind, now, w)),
   }))
 
-  const full = "SUBAGENTI"
-  const title = fit(full, w)
-  const count = String(activeCount)
-  // The count sits on the right edge, with at least one blank before it, or is left out.
-  const showCount = activeCount > 0 && title === full && w - full.length >= count.length + 1
+  const title = fit(PANEL_TITLE, w)
+  const state = headerState(waiting.length, working.length)
+  // The state sits on the right edge, with at least one blank before it, or is left out.
+  const showState = state !== undefined && title === PANEL_TITLE && w - title.length >= state.text.length + 1
   const hidden = activeCount - shownActive
   return {
     empty: children.length === 0,
-    emptyText: fit("Nessun subagente", w),
-    header: { title, count: showCount ? count.padStart(w - title.length) : "" },
+    header: showState ? { title, state: state.text.padStart(w - title.length), stateKind: state.kind } : { title, state: "" },
     groups,
     hidden,
     hiddenText: fit(`+${hidden} altri`, w),
