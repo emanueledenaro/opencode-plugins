@@ -303,17 +303,20 @@ export const REFRESH_BATCH_MS = 100
  * Many `request` calls before the timer fires run `run` once. Events of every session (step starts, tool
  * calls) ask for a rebuild, so a busy subagent would otherwise rebuild the snapshot many times a second.
  */
-export function createRefreshBatch(options: { run: () => void; scheduler: Scheduler; delayMs?: number }) {
+export function createRefreshBatch(options: { run: () => void; scheduler: Scheduler }) {
   let handle: unknown
+  let disposed = false
   return {
     request() {
-      if (handle !== undefined) return
+      if (disposed || handle !== undefined) return
       handle = options.scheduler.set(() => {
         handle = undefined
         options.run()
-      }, options.delayMs ?? REFRESH_BATCH_MS)
+      }, REFRESH_BATCH_MS)
     },
+    /** Final: drops a waiting request, and a request after it sets no timer. */
     dispose() {
+      disposed = true
       if (handle !== undefined) options.scheduler.clear(handle)
       handle = undefined
     },
@@ -322,15 +325,13 @@ export function createRefreshBatch(options: { run: () => void; scheduler: Schedu
 
 /**
  * Turns a stream of measured widths into few updates: the first real size is applied at once, later
- * ones are coalesced to one update per `delayMs`, and a size that is already shown does nothing.
+ * ones are coalesced to one update per RESIZE_COALESCE_MS, and a size that is already shown does nothing.
  */
 export function createWidthTracker(options: {
   initial: number
   onChange: (width: number) => void
-  delayMs?: number
   scheduler?: Scheduler
 }) {
-  const delay = options.delayMs ?? RESIZE_COALESCE_MS
   const scheduler: Scheduler = options.scheduler ?? {
     set: (fn, ms) => setTimeout(fn, ms),
     clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
@@ -359,7 +360,7 @@ export function createWidthTracker(options: {
         flush()
         return
       }
-      if (handle === undefined) handle = scheduler.set(flush, delay)
+      if (handle === undefined) handle = scheduler.set(flush, RESIZE_COALESCE_MS)
     },
     dispose() {
       disposed = true

@@ -6,6 +6,7 @@ import {
   buildView,
   clockIt,
   createRefreshBatch,
+  REFRESH_BATCH_MS,
   createRunTracker,
   createWidthTracker,
   displayTitle,
@@ -711,10 +712,15 @@ describe("createWidthTracker", () => {
 describe("createRefreshBatch", () => {
   const fakeTimers = () => {
     const pending: (() => void)[] = []
+    const delays: number[] = []
     return {
       pending,
+      delays,
       scheduler: {
-        set: (fn: () => void) => pending.push(fn),
+        set: (fn: () => void, ms: number) => {
+          delays.push(ms)
+          return pending.push(fn)
+        },
         clear: (handle: unknown) => void pending.splice(Number(handle) - 1, 1),
       },
       fire: () => pending.splice(0).forEach((fn) => fn()),
@@ -731,6 +737,18 @@ describe("createRefreshBatch", () => {
     batch.request()
     timers.fire()
     expect(rebuilds).toBe(2)
+  })
+  test("waits 100 ms, so a burst of events is one rebuild", () => {
+    const timers = fakeTimers()
+    createRefreshBatch({ run: () => {}, scheduler: timers.scheduler }).request()
+    expect([timers.delays, REFRESH_BATCH_MS]).toEqual([[100], 100])
+  })
+  test("a request after dispose sets no timer", () => {
+    const timers = fakeTimers()
+    const batch = createRefreshBatch({ run: () => {}, scheduler: timers.scheduler })
+    batch.dispose()
+    batch.request()
+    expect(timers.pending).toHaveLength(0)
   })
   test("dispose drops a request that is still waiting", () => {
     const timers = fakeTimers()
