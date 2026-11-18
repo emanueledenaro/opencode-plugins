@@ -45,7 +45,7 @@ const LAYOUT_SETTLE_MS = 50
 const PATH_ITEM_ID = "prompt.footer.location"
 
 // A theme token is either a colour or an object with .base; anything missing falls back.
-// (text.muted and text.faint are plain colours, feedback.warning has .base.)
+// (text.muted and text.faint are plain colours, text.feedback.warning has .base.)
 const pick = (token: any): any => (token && typeof token === "object" && "base" in token ? token.base : token)
 
 const layoutOf = (node: any): LayoutBox => ({
@@ -76,9 +76,10 @@ export default Plugin.define({
       get faint() {
         return pick(theme.text?.faint) ?? pick(theme.text?.muted) ?? pick(theme.text?.base)
       },
-      // the one accent: "slower than this model usually is"
+      // The one accent: "slower than this model usually is". The theme's yellow hue, as claude-usage draws
+      // the middle of its scale beside it; the warning colour (orange) means "waits for you" in these plugins.
       get slow() {
-        return pick(theme.text?.feedback?.warning) ?? pick(theme.text?.base)
+        return pick(theme.hue?.yellow?.[200]) ?? pick(theme.text?.feedback?.warning) ?? pick(theme.text?.base)
       },
     }
 

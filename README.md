@@ -19,7 +19,9 @@ Small local plugins for OpenCode 2. Each folder is one plugin: point OpenCode at
 The interface text is Italian. What the plugins share:
 
 - Times are spans, never clock times, in one format: `<1m`, `12m`, `1h 5m`, `2g 3h`. With a word for what they measure: `12m` at work, `3m fa` finished, `da 2m` waiting for you, `si azzera tra 5g 2h`.
-- A colour has one meaning in each place. In the sidebar and above the prompt, orange (the theme's warning colour) is "waits for you": the `Ti aspetta` group, the `Serve da te` title, the Plan line; green is finished, red is failed. In the footer the same three are a scale: the usage meters go green, orange, red, and token-rate turns its number orange when a reply is slower than usual. Where a colour says a state, a word or a number says it too (`● rosso · ritmo 26% · 33 sopra`).
+- Orange (the theme's warning colour) means one thing in every panel: it waits for you. The `Ti aspetta` group, the `Serve da te` title, the Plan line, `accesso scaduto, apri claude`. Green is finished or on pace, red is failed or over budget. Yellow (the theme's yellow hue) is caution with nothing for you to do: the middle of the usage meters, a reply slower than usual; in agents-panel, where no state is yellow, it is the Haiku label. Where a colour says a state, a word or a number says it too (`● giallo · ritmo 50% · 15 sopra`). `copies.test.ts` counts the places that read the warning colour.
+- One exception, outside the panels: in a `stato` block in the chat, `≈` (in progress) is drawn in the warning colour. That is the mark's own colour in my status replies and it does not ask for anything.
+- A clock that shows minutes moves every 30 seconds, in every panel that has one.
 - A sidebar block has a bold title in sentence case, like OpenCode's own blocks, with a short state on its right, and is not drawn when it has nothing to say.
 - A panel that cannot be drawn says `<name>: non disponibile` in the faint colour: `Subagenti: non disponibile`, `Serve da te: non disponibile`, `Citazioni: non disponibile`, `Avviso Plan: non disponibile`, `tok/s: non disponibile`, `Claude: uso non disponibile`.
 
