@@ -5,7 +5,9 @@
 export const POLL_INTERVAL_MS = 5 * 60_000
 export const MAX_BACKOFF_MS = 60 * 60_000
 export const MIN_MANUAL_GAP_MS = 30_000
-export const WEEKLY_THRESHOLD_PERCENT = 90 // red and a toast above this weekly percentage
+// From this weekly percentage: red and a toast. It is the 10% reserve of the owner's plan line, fixed
+// here: the plugin does not read that line.
+export const WEEKLY_THRESHOLD_PERCENT = 90
 export const FABLE_WARN_PERCENT = 50 // the Fable meter turns yellow from here
 export const FABLE_STOP_PERCENT = 80 // red and a toast from here: agents must stop using Fable
 
@@ -107,13 +109,27 @@ export function parseUsage(body: unknown, now: number): UsageSnapshot | null {
 
 // --- thresholds and formatting -------------------------------------------------------------
 
+/**
+ * The whole percent that is drawn. Every threshold in this file judges this number and not the raw one,
+ * so a colour, a word or a toast never disagrees with the number beside it (89.6 is drawn "90%" and
+ * counts as 90).
+ */
+export function shownPercent(percent: number): number {
+  return Math.round(percent)
+}
+
+/** Inside the reserve: from WEEKLY_THRESHOLD_PERCENT. One line for the colour, the words and the toast. */
+export function inReserve(percent: number): boolean {
+  return shownPercent(percent) >= WEEKLY_THRESHOLD_PERCENT
+}
+
 export function weeklyOverThreshold(snapshot: UsageSnapshot | null): boolean {
-  return (snapshot?.sevenDay?.percent ?? 0) > WEEKLY_THRESHOLD_PERCENT
+  return inReserve(snapshot?.sevenDay?.percent ?? 0)
 }
 
 // From 80% the agents must stop using Fable.
 export function fableOverThreshold(snapshot: UsageSnapshot | null): boolean {
-  return (snapshot?.fable?.percent ?? 0) >= FABLE_STOP_PERCENT
+  return shownPercent(snapshot?.fable?.percent ?? 0) >= FABLE_STOP_PERCENT
 }
 
 /** True when the numbers were fetched at or after `startedAt`, not just read from the cache file. */
@@ -141,7 +157,7 @@ export function createFableWatch() {
 }
 
 export function formatPercent(percent: number): string {
-  return `${Math.round(percent)}%`
+  return `${shownPercent(percent)}%`
 }
 
 export function formatDuration(ms: number): string {
@@ -216,7 +232,7 @@ export function formatDetail(state: MonitorState, now: number): string {
     lines.push(`Updated ${formatDuration(now - state.snapshot.fetchedAt)} ago`)
     if (weeklyOverThreshold(state.snapshot)) {
       lines.push(
-        `Weekly usage is above ${WEEKLY_THRESHOLD_PERCENT}%: you are inside your 10% reserve.`,
+        `Weekly usage is at or above ${WEEKLY_THRESHOLD_PERCENT}%: you are inside your 10% reserve.`,
       )
     }
   } else {
@@ -443,18 +459,44 @@ export function createUsageMonitor(deps: MonitorDeps) {
 
 export type Level = "ok" | "warn" | "high"
 
-// By the percent alone: green under 70%, yellow from 70%, red above the reserve line. The 5-hour window
+/**
+ * Where the tui takes the colour of each level, and the word that names it beside the dot. "warn" is the
+ * theme's yellow hue, as its word says. The theme's warning colour is orange in the apple theme and means
+ * "waits for you" (the login line), so here it is only the fallback of a theme that has no hues.
+ */
+export const LEVEL_COLOURS: Record<Level, { word: string; hue?: "yellow"; feedback: "success" | "warning" | "error" }> = {
+  ok: { word: "verde", feedback: "success" },
+  warn: { word: "giallo", hue: "yellow", feedback: "warning" },
+  high: { word: "rosso", feedback: "error" },
+}
+
+/** The parts of the host theme a level colour is read from. `hue` holds named scales (hue.yellow[200]). */
+export type LevelTheme = {
+  hue?: Record<string, Record<number, unknown> | undefined>
+  text: { base: unknown; feedback?: Partial<Record<"success" | "warning" | "error", { base?: unknown } | undefined>> }
+}
+
+/** The colour a level is drawn in: its named hue if the theme has one, else its feedback colour, else plain text. */
+export function levelColour(level: Level, theme: LevelTheme): unknown {
+  const look = LEVEL_COLOURS[level]
+  const hue = look.hue === undefined ? undefined : theme.hue?.[look.hue]?.[200]
+  return hue ?? theme.text.feedback?.[look.feedback]?.base ?? theme.text.base
+}
+
+// By the percent alone: green under 70%, yellow from 70%, red from the reserve line. The 5-hour window
 // uses it, and the week when its reset time is unknown (see weekLevel).
 export function usageLevel(percent: number): Level {
-  if (percent > WEEKLY_THRESHOLD_PERCENT) return "high"
-  if (percent >= 70) return "warn"
+  const shown = shownPercent(percent)
+  if (shown >= WEEKLY_THRESHOLD_PERCENT) return "high"
+  if (shown >= 70) return "warn"
   return "ok"
 }
 
 // Fable has its own lines: green under 50%, yellow from 50%, red from 80%.
 export function fableLevel(percent: number): Level {
-  if (percent >= FABLE_STOP_PERCENT) return "high"
-  if (percent >= FABLE_WARN_PERCENT) return "warn"
+  const shown = shownPercent(percent)
+  if (shown >= FABLE_STOP_PERCENT) return "high"
+  if (shown >= FABLE_WARN_PERCENT) return "warn"
   return "ok"
 }
 
@@ -465,7 +507,10 @@ export const PACE_HIGH_MARGIN = 25
 /** In the last hours of the week what is left expires, so only the reserve line can still turn it red. */
 export const LAST_HOURS_MS = 12 * 60 * 60_000
 
-/** `pace`: the percent an even week would have used by now. `margin`: percent used minus pace. */
+/**
+ * `pace`: the percent an even week would have used by then. `margin`: percent used minus pace. Both are
+ * the whole numbers the dialog shows, and the level is judged on them.
+ */
 export type WeekPace = { level: Level; pace: number; margin: number; reason: "pace" | "reserve" | "last-hours" }
 
 /**
@@ -473,42 +518,66 @@ export type WeekPace = { level: Level; pace: number; margin: number; reason: "pa
  * until the reset, between 0.5 and 7; pace = days gone / 7 x 100; margin = used - pace. Green up to
  * PACE_WARN_MARGIN, yellow up to PACE_HIGH_MARGIN, red above it or inside the reserve; in the last
  * LAST_HOURS_MS green unless inside the reserve. Null when the reset time is unknown or already past.
- * Banked resets and work in flight are not known here, so this can be stricter than a coordinator's own count.
+ * `at` is the moment the percent was read (see readingWeekLevel), not today's clock.
+ * The plugin knows the percent and the reset time only, so it can differ from a coordinator's own count
+ * both ways: banked resets are not counted, which makes it stricter; work in flight is not counted, which
+ * makes it more lenient. The reserve is the fixed WEEKLY_THRESHOLD_PERCENT.
  */
-export function weekPace(window: UsageWindow, now: number): WeekPace | null {
-  if (window.resetsAt === null || window.resetsAt <= now) return null
-  const left = window.resetsAt - now
+export function weekPace(window: UsageWindow, at: number): WeekPace | null {
+  if (window.resetsAt === null || window.resetsAt <= at) return null
+  const left = window.resetsAt - at
   const daysGone = Math.min(7, Math.max(0.5, 7 - left / DAY_MS))
-  const pace = (daysGone / 7) * 100
-  const margin = window.percent - pace
-  if (window.percent >= WEEKLY_THRESHOLD_PERCENT) return { level: "high", pace, margin, reason: "reserve" }
+  const pace = shownPercent((daysGone / 7) * 100)
+  const margin = shownPercent(window.percent) - pace
+  if (inReserve(window.percent)) return { level: "high", pace, margin, reason: "reserve" }
   if (left <= LAST_HOURS_MS) return { level: "ok", pace, margin, reason: "last-hours" }
   const level: Level = margin > PACE_HIGH_MARGIN ? "high" : margin > PACE_WARN_MARGIN ? "warn" : "ok"
   return { level, pace, margin, reason: "pace" }
 }
 
 /** The colour of the week: by its pace when the reset time is known, else by the percent alone. */
-export function weekLevel(window: UsageWindow, now: number): Level {
-  return weekPace(window, now)?.level ?? usageLevel(window.percent)
+export function weekLevel(window: UsageWindow, at: number): Level {
+  return weekPace(window, at)?.level ?? usageLevel(window.percent)
 }
 
-const LEVEL_WORD: Record<Level, string> = { ok: "verde", warn: "giallo", high: "rosso" }
-
-const RESERVE_IT = `● ${LEVEL_WORD.high} · nella riserva del ${100 - WEEKLY_THRESHOLD_PERCENT}%`
+const RESERVE_IT = `● ${LEVEL_COLOURS.high.word} · nella riserva del ${100 - WEEKLY_THRESHOLD_PERCENT}%`
 
 /**
- * The week's colour in words, so the colour never stands alone: "● rosso · ritmo 25% · 34 sopra".
+ * The week's colour in words, so the colour never stands alone: "● rosso · ritmo 26% · 33 sopra".
  * Without a reset time there is no pace to tell: only the reserve is said, else nothing (undefined).
  */
-export function paceIt(window: UsageWindow, now: number): string | undefined {
-  const pace = weekPace(window, now)
-  if (!pace) return usageLevel(window.percent) === "high" ? RESERVE_IT : undefined
+export function paceIt(window: UsageWindow, at: number): string | undefined {
+  const pace = weekPace(window, at)
+  if (!pace) return inReserve(window.percent) ? RESERVE_IT : undefined
   if (pace.reason === "reserve") return RESERVE_IT
-  const lead = `● ${LEVEL_WORD[pace.level]}`
+  const lead = `● ${LEVEL_COLOURS[pace.level].word}`
   if (pace.reason === "last-hours") return `${lead} · ultime ore, il resto scade`
-  const points = Math.round(Math.abs(pace.margin))
+  const points = Math.abs(pace.margin)
   const side = points === 0 ? "in pari" : `${points} ${pace.margin > 0 ? "sopra" : "sotto"}`
-  return `${lead} · ritmo ${formatPercent(pace.pace)} · ${side}`
+  return `${lead} · ritmo ${pace.pace}% · ${side}`
+}
+
+/** A reading older than this is old: the owner's budget rule counts a reading only while it is fresher. */
+export const OLD_READING_MS = 10 * 60_000
+
+/**
+ * The colour of the week for a reading, judged at the moment the numbers were read and never at today's
+ * clock. While refreshes fail the percent stands still; judged against the clock, the pace would keep
+ * rising and an old red would turn yellow, then green, with no new data.
+ */
+export function readingWeekLevel(snapshot: UsageSnapshot | null): Level | undefined {
+  const week = snapshot?.sevenDay
+  return week ? weekLevel(week, snapshot.fetchedAt) : undefined
+}
+
+/**
+ * paceIt for a reading, judged at the moment it was read. An old reading also says its age, because the
+ * judgement is as old as the numbers: "● rosso · ritmo 26% · 33 sopra · 2g fa".
+ */
+export function readingPaceIt(snapshot: UsageSnapshot, now: number): string | undefined {
+  const text = snapshot.sevenDay ? paceIt(snapshot.sevenDay, snapshot.fetchedAt) : undefined
+  const age = now - snapshot.fetchedAt
+  return text !== undefined && age >= OLD_READING_MS ? `${text} · ${relativeIt(age)} fa` : text
 }
 
 // A bar of `cells` cells: how many are filled and how many are empty.
@@ -864,6 +933,13 @@ const MESSAGES = {
 export function footerMessage(kind: keyof typeof MESSAGES, budget: number): string | null {
   const room = Number.isNaN(budget) ? Infinity : budget
   return MESSAGES[kind].find((text) => text.length <= room) ?? null
+}
+
+/** The pace line of a reading for `width` columns: whole, then without the age of an old reading, then cut. */
+export function readingPaceFit(snapshot: UsageSnapshot, now: number, width: number): string | undefined {
+  const full = readingPaceIt(snapshot, now)
+  if (full === undefined || full.length <= width) return full
+  return fitText(readingPaceIt(snapshot, snapshot.fetchedAt) ?? full, width)
 }
 
 /** The reset line for `width` columns: whole, then without the day, then without "si azzera", then cut. */

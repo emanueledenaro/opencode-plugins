@@ -48,6 +48,17 @@ import {
   redact,
   serializeCache,
   weeklyOverThreshold,
+  LEVEL_COLOURS,
+  OLD_READING_MS,
+  formatPercent,
+  inReserve,
+  levelColour,
+  readingPaceFit,
+  readingPaceIt,
+  readingWeekLevel,
+  shownPercent,
+  type LevelTheme,
+  type UsageSnapshot,
 } from "./claude-usage-core"
 
 // Every token below is a made-up string, never a real credential.
@@ -160,15 +171,22 @@ describe("parseUsage: Fable weekly limit", () => {
 describe("Fable thresholds", () => {
   test("green under 50%, yellow from 50%, red from 80%", () => {
     expect(fableLevel(0)).toBe("ok")
-    expect(fableLevel(49.9)).toBe("ok")
+    expect(fableLevel(49)).toBe("ok")
     expect(fableLevel(50)).toBe("warn")
-    expect(fableLevel(79.9)).toBe("warn")
+    expect(fableLevel(79)).toBe("warn")
     expect(fableLevel(80)).toBe("high")
     expect(fableLevel(100)).toBe("high")
   })
+  test("the lines are judged on the number that is drawn: 79.5 is drawn 80% and is red", () => {
+    expect([formatPercent(49.4), fableLevel(49.4)]).toEqual(["49%", "ok"])
+    expect([formatPercent(49.5), fableLevel(49.5)]).toEqual(["50%", "warn"])
+    expect([formatPercent(79.4), fableLevel(79.4)]).toEqual(["79%", "warn"])
+    expect([formatPercent(79.5), fableLevel(79.5)]).toEqual(["80%", "high"])
+  })
   test("the stop line is 80% included", () => {
     const at = (percent: number) => parseUsage(withLimits([fableEntry(percent)]), NOW)
-    expect(fableOverThreshold(at(79.9))).toBe(false)
+    expect(fableOverThreshold(at(79.4))).toBe(false)
+    expect(fableOverThreshold(at(79.5))).toBe(true) // drawn "80%"
     expect(fableOverThreshold(at(80))).toBe(true)
     expect(fableOverThreshold(at(120))).toBe(true)
     expect(fableOverThreshold(parseUsage(usageBody(1, 2), NOW))).toBe(false)
@@ -223,11 +241,20 @@ describe("Fable toast", () => {
 
 describe("weekly threshold", () => {
   const week = (percent: number) => parseUsage(usageBody(1, percent), NOW)
-  test("90% exactly is inside the reserve, above 90% is not", () => {
-    expect(weeklyOverThreshold(week(90))).toBe(false)
-    expect(weeklyOverThreshold(week(90.5))).toBe(true)
+  test("the reserve starts at 90% as drawn: one line for the toast, the colour and the words", () => {
+    expect(weeklyOverThreshold(week(89.4))).toBe(false)
+    expect(weeklyOverThreshold(week(89.5))).toBe(true) // drawn "90%"
+    expect(weeklyOverThreshold(week(90))).toBe(true)
     expect(weeklyOverThreshold(week(96))).toBe(true)
     expect(weeklyOverThreshold(null)).toBe(false)
+    for (const percent of [89.4, 89.5, 90, 90.4, 96]) {
+      const inside = inReserve(percent)
+      expect({ percent, toast: weeklyOverThreshold(week(percent)) }).toEqual({ percent, toast: inside })
+      expect({ percent, red: usageLevel(percent) === "high" }).toEqual({ percent, red: inside })
+      expect({ percent, said: paceIt({ percent, resetsAt: null }, NOW) !== undefined }).toEqual({ percent, said: inside })
+      const paced = weekPace({ percent, resetsAt: NOW + 3 * 24 * 60 * 60_000 }, NOW)
+      expect({ percent, reserve: paced?.reason === "reserve" }).toEqual({ percent, reserve: inside })
+    }
   })
   test("the footer says so clearly", () => {
     expect(formatShort(week(96))).toContain("WEEKLY OVER 90%")
@@ -544,8 +571,37 @@ describe("look", () => {
     expect(usageLevel(0)).toBe("ok")
     expect(usageLevel(69)).toBe("ok")
     expect(usageLevel(70)).toBe("warn")
-    expect(usageLevel(90)).toBe("warn")
+    expect(usageLevel(89)).toBe("warn")
+    expect(usageLevel(90)).toBe("high")
     expect(usageLevel(91)).toBe("high")
+  })
+  test("a level is judged on the number that is drawn, so the two never disagree", () => {
+    expect([formatPercent(69.4), usageLevel(69.4)]).toEqual(["69%", "ok"])
+    expect([formatPercent(69.5), usageLevel(69.5)]).toEqual(["70%", "warn"])
+    expect([formatPercent(89.4), usageLevel(89.4)]).toEqual(["89%", "warn"])
+    expect([formatPercent(89.5), usageLevel(89.5)]).toEqual(["90%", "high"])
+    expect([shownPercent(59.4), shownPercent(59.5), shownPercent(59.6)]).toEqual([59, 60, 60])
+  })
+  test("the word beside the dot names the colour that is drawn: giallo is the theme's yellow hue", () => {
+    expect(LEVEL_COLOURS.warn).toEqual({ word: "giallo", hue: "yellow", feedback: "warning" })
+    expect(LEVEL_COLOURS.ok).toEqual({ word: "verde", feedback: "success" })
+    expect(LEVEL_COLOURS.high).toEqual({ word: "rosso", feedback: "error" })
+  })
+  test("levelColour: yellow is never the theme's warning colour, which means 'waits for you'", () => {
+    const apple: LevelTheme = {
+      hue: { yellow: { 200: "#ffd60a" }, orange: { 200: "#ff9f0a" } },
+      text: { base: "#fff", feedback: { success: { base: "#30d158" }, warning: { base: "#ff9f0a" }, error: { base: "#ff453a" } } },
+    }
+    expect(levelColour("warn", apple)).toBe("#ffd60a")
+    expect(levelColour("warn", apple)).not.toBe(apple.text.feedback?.warning?.base)
+    expect(levelColour("ok", apple)).toBe("#30d158")
+    expect(levelColour("high", apple)).toBe("#ff453a")
+  })
+  test("levelColour: a theme with no yellow hue falls back to its warning colour, then to plain text", () => {
+    const noHue: LevelTheme = { text: { base: "#fff", feedback: { warning: { base: "#ff9f0a" } } } }
+    expect(levelColour("warn", noHue)).toBe("#ff9f0a")
+    expect(levelColour("warn", { hue: { yellow: {} }, text: { base: "#fff" } })).toBe("#fff")
+    expect(levelColour("ok", noHue)).toBe("#fff")
   })
   test("meter", () => {
     expect(meter(0, 10)).toEqual({ filled: "", empty: "▱".repeat(10) })
@@ -617,18 +673,14 @@ describe("the week is coloured by its pace", () => {
   const week = (percent: number, daysIn: number) => ({ percent, resetsAt: NOW + (7 - daysIn) * DAY })
 
   test("59% used 1.8 days into the week is red: the percent alone would have said green", () => {
-    const pace = weekPace(week(59, 1.8), NOW)
     expect(usageLevel(59)).toBe("ok")
-    expect(pace?.level).toBe("high")
-    expect(pace?.reason).toBe("pace")
-    expect(Math.round(pace?.pace ?? 0)).toBe(26)
-    expect(Math.round(pace?.margin ?? 0)).toBe(33)
+    expect(weekPace(week(59, 1.8), NOW)).toEqual({ level: "high", reason: "pace", pace: 26, margin: 33 })
     expect(weekLevel(week(59, 1.8), NOW)).toBe("high")
   })
 
   test("the same 59% five days in is green: it is behind the pace", () => {
     expect(weekLevel(week(59, 5), NOW)).toBe("ok")
-    expect(Math.round(weekPace(week(59, 5), NOW)?.margin ?? 0)).toBe(-12)
+    expect(weekPace(week(59, 5), NOW)?.margin).toBe(-12)
   })
 
   test("green up to 10 points ahead, yellow up to 25, red above", () => {
@@ -640,19 +692,53 @@ describe("the week is coloured by its pace", () => {
     expect(weekLevel(week(75.5, 3.5), NOW)).toBe("high")
   })
 
+  test("the level is judged on the whole numbers that are shown: 10.4 ahead reads '10 sopra' and is green", () => {
+    expect(paceIt(week(60.4, 3.5), NOW)).toBe("● verde · ritmo 50% · 10 sopra")
+    expect(paceIt(week(60.5, 3.5), NOW)).toBe("● giallo · ritmo 50% · 11 sopra")
+    expect(paceIt(week(75.4, 3.5), NOW)).toBe("● giallo · ritmo 50% · 25 sopra")
+    expect(paceIt(week(75.5, 3.5), NOW)).toBe("● rosso · ritmo 50% · 26 sopra")
+    // The pace is rounded too: 2.48 days in it is 35.4%, drawn 35%; 45.4% used is drawn 45%, so 10 ahead.
+    expect(paceIt(week(45.4, 2.48), NOW)).toBe("● verde · ritmo 35% · 10 sopra")
+    expect(weekPace(week(45.4, 2.48), NOW)).toEqual({ level: "ok", reason: "pace", pace: 35, margin: 10 })
+  })
+
+  test("the same words never come in two colours, whatever the percent and the day", () => {
+    const colours = new Map<string, Set<string>>()
+    for (let tenths = 0; tenths <= 1000; tenths += 3) {
+      for (let day = 0.05; day < 6.5; day += 0.07) {
+        const [dot, ...rest] = (paceIt(week(tenths / 10, day), NOW) ?? "").split(" · ")
+        const words = rest.join(" · ")
+        colours.set(words, (colours.get(words) ?? new Set()).add(dot ?? ""))
+      }
+    }
+    expect(colours.size).toBeGreaterThan(100)
+    expect([...colours].filter(([, dots]) => dots.size > 1).map(([words, dots]) => `${words}: ${[...dots].join(", ")}`)).toEqual([])
+  })
+
+  test("the margin shown is the percent shown minus the pace shown", () => {
+    for (let tenths = 0; tenths < 895; tenths += 7) {
+      for (let day = 0.6; day < 6.4; day += 0.13) {
+        const pace = weekPace(week(tenths / 10, day), NOW)!
+        expect(pace.margin).toBe(Number.parseInt(formatPercent(tenths / 10)) - pace.pace)
+        expect(Number.isInteger(pace.pace)).toBe(true)
+      }
+    }
+  })
+
   test("the first hours of a week count as half a day, so a little use is not judged against a pace near 0", () => {
     const hourIn = week(17, 1 / 24)
-    expect(weekPace(hourIn, NOW)?.pace).toBeCloseTo(100 / 14, 5)
+    expect(weekPace(hourIn, NOW)?.pace).toBe(7) // half a day of seven: 7.14%, drawn 7%
     expect(weekLevel(hourIn, NOW)).toBe("ok")
     expect(weekLevel(week(18, 1 / 24), NOW)).toBe("warn")
   })
 
   test("a reset more than a week away still counts as half a day gone", () => {
-    expect(weekPace({ percent: 5, resetsAt: NOW + 9 * DAY }, NOW)?.pace).toBeCloseTo(100 / 14, 5)
+    expect(weekPace({ percent: 5, resetsAt: NOW + 9 * DAY }, NOW)?.pace).toBe(7)
   })
 
   test("inside the reserve it is red whatever the pace", () => {
-    expect(weekLevel(week(89.9, 6.9), NOW)).toBe("ok")
+    expect(weekLevel(week(89.4, 6.9), NOW)).toBe("ok")
+    expect(weekPace(week(89.5, 6.9), NOW)).toMatchObject({ level: "high", reason: "reserve" }) // drawn "90%"
     expect(weekPace(week(90, 6.9), NOW)).toMatchObject({ level: "high", reason: "reserve" })
     expect(weekPace(week(97, 3), NOW)).toMatchObject({ level: "high", reason: "reserve" })
   })
@@ -670,6 +756,7 @@ describe("the week is coloured by its pace", () => {
     expect(weekLevel({ percent: 59, resetsAt: null }, NOW)).toBe("ok")
     expect(weekLevel({ percent: 70, resetsAt: null }, NOW)).toBe("warn")
     expect(weekLevel({ percent: 91, resetsAt: NOW - 1 }, NOW)).toBe("high")
+    expect(weekLevel({ percent: 90, resetsAt: null }, NOW)).toBe("high")
   })
 
   test("paceIt says the colour in words, with the pace and how far from it", () => {
@@ -687,6 +774,8 @@ describe("the week is coloured by its pace", () => {
   test("paceIt without a reset time says only the reserve, else nothing", () => {
     expect(paceIt({ percent: 59, resetsAt: null }, NOW)).toBeUndefined()
     expect(paceIt({ percent: 91, resetsAt: null }, NOW)).toBe("● rosso · nella riserva del 10%")
+    expect(paceIt({ percent: 90, resetsAt: null }, NOW)).toBe("● rosso · nella riserva del 10%")
+    expect(paceIt({ percent: 89, resetsAt: null }, NOW)).toBeUndefined()
   })
 
   test("the footer draws the week in its pace colour and the other windows by their own lines", () => {
@@ -705,6 +794,69 @@ describe("the week is coloured by its pace", () => {
     expect(iconTone({ five: null, week: 59, fable: 36, stale: false, weekLevel: "high" })).toBe("high")
     expect(iconTone({ five: null, week: 75, fable: 10, stale: false, weekLevel: "ok" })).toBe("ok")
     expect(footerLayout({ five: null, week: 59, fable: 36, stale: false, weekLevel: "high" }, 1)?.icon).toBe("high")
+  })
+})
+
+describe("an old reading is judged at the time it was read", () => {
+  const MIN = 60_000
+  const DAY = 24 * 60 * MIN
+  // Long ago on purpose: judged against the real clock these weeks are over, so nothing here passes by luck.
+  const READ = new Date(2025, 0, 15, 12, 0).getTime()
+  /** Numbers read at READ, `daysIn` days into the week. */
+  const reading = (percent: number, daysIn: number): UsageSnapshot => ({
+    fetchedAt: READ,
+    fiveHour: null,
+    sevenDay: { percent, resetsAt: READ + (7 - daysIn) * DAY },
+    fable: null,
+  })
+
+  test("a red reading is still red a day later and two days later, when no refresh came", () => {
+    const stale = reading(59, 1.8)
+    // Against today's clock the same numbers would drift to yellow and then to green with no new data.
+    expect([0, 1, 2].map((days) => weekLevel(stale.sevenDay!, READ + days * DAY))).toEqual(["high", "warn", "ok"])
+    expect(readingWeekLevel(stale)).toBe("high")
+    expect(readingPaceIt(stale, READ)).toBe("● rosso · ritmo 26% · 33 sopra")
+    expect(readingPaceIt(stale, READ + DAY)).toBe("● rosso · ritmo 26% · 33 sopra · 1g fa")
+    expect(readingPaceIt(stale, READ + 2 * DAY + 3 * 60 * MIN)).toBe("● rosso · ritmo 26% · 33 sopra · 2g 3h fa")
+  })
+
+  test("the footer and the one-character icon keep that red beside old numbers", () => {
+    const stale = reading(59, 1.8)
+    const input = { five: null, week: 59, stale: true, weekLevel: readingWeekLevel(stale) }
+    expect(footerLayout(input, 200)?.parts.map((part) => part.level)).toEqual(["high"])
+    expect(footerLayout(input, 14)?.marker).toBe(false) // too narrow for "(vecchio)": the colour is all that is left
+    expect(footerLayout(input, 14)?.parts.map((part) => part.level)).toEqual(["high"])
+    expect(iconTone(input)).toBe("high")
+  })
+
+  test("the age is said from 10 minutes, the budget rule's limit for a reading that still counts", () => {
+    expect(OLD_READING_MS).toBe(10 * MIN)
+    const fresh = reading(65, 3.5)
+    expect(readingPaceIt(fresh, READ + 10 * MIN - 1)).toBe("● giallo · ritmo 50% · 15 sopra")
+    expect(readingPaceIt(fresh, READ + 10 * MIN)).toBe("● giallo · ritmo 50% · 15 sopra · 10m fa")
+    expect(readingPaceIt(fresh, READ - 5 * MIN)).toBe("● giallo · ritmo 50% · 15 sopra") // clock skew
+  })
+
+  test("the reserve and the last hours of an old reading say their age too", () => {
+    expect(readingPaceIt(reading(93, 6), READ + 60 * MIN)).toBe("● rosso · nella riserva del 10% · 1h fa")
+    expect(readingPaceIt(reading(80, 6.9), READ + 60 * MIN)).toBe("● verde · ultime ore, il resto scade · 1h fa")
+  })
+
+  test("a reading with no week, or no reading, has no colour and no line", () => {
+    const noWeek: UsageSnapshot = { fetchedAt: READ, fiveHour: { percent: 10, resetsAt: null }, sevenDay: null, fable: null }
+    expect(readingWeekLevel(noWeek)).toBeUndefined()
+    expect(readingWeekLevel(null)).toBeUndefined()
+    expect(readingPaceIt(noWeek, READ + DAY)).toBeUndefined()
+    expect(readingPaceFit(noWeek, READ + DAY, 40)).toBeUndefined()
+  })
+
+  test("readingPaceFit: a narrow dialog loses the age first, then the line is cut", () => {
+    const stale = reading(59, 1.8)
+    const now = READ + 2 * DAY + 3 * 60 * MIN
+    expect(readingPaceFit(stale, now, 41)).toBe("● rosso · ritmo 26% · 33 sopra · 2g 3h fa")
+    expect(readingPaceFit(stale, now, 40)).toBe("● rosso · ritmo 26% · 33 sopra")
+    expect(readingPaceFit(stale, now, 30)).toBe("● rosso · ritmo 26% · 33 sopra")
+    expect(readingPaceFit(stale, now, 29)).toBe("● rosso · ritmo 26% · 33 sop…")
   })
 })
 

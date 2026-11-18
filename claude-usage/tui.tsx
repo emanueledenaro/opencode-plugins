@@ -21,19 +21,21 @@ import {
   FOOTER_ICON,
   footerMessage,
   formatPercent,
+  levelColour,
   meter,
   needsYou,
-  paceIt,
+  readingPaceFit,
+  readingWeekLevel,
   resetFit,
   rowBudget,
   staleIt,
   updatedIt,
   usageLevel,
-  weekLevel,
   weeklyOverThreshold,
   type FooterPart,
   type IconTone,
   type Level,
+  type LevelTheme,
   type MonitorState,
   type MousePoint,
   type TextTone,
@@ -67,12 +69,10 @@ export default Plugin.define({
     // new window must not repeat a warning that was already given.
     const startedAt = Date.now()
     const theme = context.theme
-    const colour = (level: Level) =>
-      level === "high"
-        ? (theme.text.feedback?.error?.base ?? theme.text.base)
-        : level === "warn"
-          ? (theme.text.feedback?.warning?.base ?? theme.text.base)
-          : (theme.text.feedback?.success?.base ?? theme.text.base)
+    // Green, yellow, red of the meters: "giallo" is the theme's yellow hue (see LEVEL_COLOURS).
+    const colour = (level: Level) => levelColour(level, theme as unknown as LevelTheme)
+    // The theme's warning colour (orange in the apple theme) has one meaning here: it waits for you.
+    const waitsForYou = () => theme.text.feedback?.warning?.base ?? theme.text.base
 
     // Text colours by tone. While the mouse is over the footer item each tone is one step brighter.
     const toneColour = (tone: TextTone) => (tone === "base" ? theme.text.base : tone === "muted" ? theme.text.muted : theme.text.faint)
@@ -205,12 +205,12 @@ export default Plugin.define({
       })
 
       const layout = createMemo(() => {
-        const week = state().snapshot?.sevenDay ?? null
         return footerLayout(
           {
             five: state().snapshot?.fiveHour?.percent ?? null,
-            week: week?.percent ?? null,
-            weekLevel: week ? weekLevel(week, now()) : undefined,
+            week: state().snapshot?.sevenDay?.percent ?? null,
+            // Judged at the time of the reading, so old numbers keep their colour (see readingWeekLevel).
+            weekLevel: readingWeekLevel(state().snapshot),
             fable: state().snapshot?.fable?.percent ?? null,
             stale: state().failure !== null,
           },
@@ -276,7 +276,7 @@ export default Plugin.define({
           >
             <Match when={loginFailure()}>
               <Show when={message("login")}>
-                {(text) => <text fg={(theme.text.feedback?.warning?.base ?? theme.text.base)} wrapMode="none">{text()}</text>}
+                {(text) => <text fg={waitsForYou()} wrapMode="none">{text()}</text>}
               </Show>
             </Match>
             <Match when={!state().snapshot}>
@@ -305,11 +305,11 @@ export default Plugin.define({
       window: UsageWindow | null
       cells: number
       inner: number
-      level?: (window: UsageWindow) => Level
-      note?: (window: UsageWindow) => string | undefined
+      level?: Level
+      note?: (width: number) => string | undefined
     }) => {
       const pad = () => dialogLayout(props.inner).labelWidth
-      const levelOf = (window: UsageWindow) => (props.level ? props.level(window) : usageLevel(window.percent))
+      const levelOf = (window: UsageWindow) => props.level ?? usageLevel(window.percent)
       return (
         <box flexDirection="column" paddingBottom={1}>
           <box flexDirection="row">
@@ -338,11 +338,9 @@ export default Plugin.define({
                 <text fg={theme.text.muted} wrapMode="none">
                   {`${"".padEnd(pad())}${resetFit(window(), now(), Math.max(1, props.inner - pad()))}`}
                 </text>
-                <Show when={props.note?.(window())}>
+                <Show when={props.note?.(Math.max(1, props.inner - pad()))}>
                   {(note) => (
-                    <text fg={colour(levelOf(window()))} wrapMode="none">
-                      {`${"".padEnd(pad())}${fitText(note(), Math.max(1, props.inner - pad()))}`}
-                    </text>
+                    <text fg={colour(levelOf(window()))} wrapMode="none">{`${"".padEnd(pad())}${note()}`}</text>
                   )}
                 </Show>
               </>
@@ -387,12 +385,12 @@ export default Plugin.define({
                   window={snap().sevenDay}
                   cells={cells()}
                   inner={inner()}
-                  level={(window) => weekLevel(window, now())}
-                  note={(window) => paceIt(window, now())}
+                  level={readingWeekLevel(snap())}
+                  note={(width) => readingPaceFit(snap(), now(), width)}
                 />
                 <Show when={snap().fable}>
                   {(fable) => (
-                    <DialogRow label="Fable" window={fable()} cells={cells()} inner={inner()} level={(window) => fableLevel(window.percent)} />
+                    <DialogRow label="Fable" window={fable()} cells={cells()} inner={inner()} level={fableLevel(fable().percent)} />
                   )}
                 </Show>
                 <text fg={theme.text.faint}>{updatedIt(snap().fetchedAt, now())}</text>
@@ -402,7 +400,7 @@ export default Plugin.define({
           <Show when={state().failure}>
             {(failure) => (
               // Orange only when it waits for you (sign in again); a retry that comes by itself is plain grey.
-              <text fg={needsYou(failure()) ? (theme.text.feedback?.warning?.base ?? theme.text.base) : theme.text.muted}>
+              <text fg={needsYou(failure()) ? waitsForYou() : theme.text.muted}>
                 {staleIt(failure(), state().nextAllowedAt - now())}
               </text>
             )}
