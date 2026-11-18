@@ -21,6 +21,7 @@ import {
   rowLayout,
   hintLine,
   titleLine,
+  createSyncGate,
   createWidthTracker,
   NO_COMMENT,
   dialogPreview,
@@ -1139,5 +1140,26 @@ describe("createWidthTracker", () => {
     t.dispose()
     expect(f.jobs).toHaveLength(0)
     expect(seen).toEqual([60])
+  })
+})
+
+describe("createSyncGate", () => {
+  test("the first look always reads", () => {
+    expect(createSyncGate().due(undefined, false)).toBe(true)
+  })
+  test("with no list shown, reads only when the folder changed", () => {
+    const gate = createSyncGate()
+    gate.due(1_000, false)
+    expect([gate.due(1_000, false), gate.due(2_000, false), gate.due(2_000, false)]).toEqual([false, true, false])
+  })
+  test("a folder that appears or goes away counts as a change", () => {
+    const gate = createSyncGate()
+    gate.due(undefined, false)
+    expect([gate.due(1_000, false), gate.due(undefined, false)]).toEqual([true, true])
+  })
+  test("while a list is shown it reads every time: the server may consume the file, the list may expire", () => {
+    const gate = createSyncGate()
+    gate.due(1_000, true)
+    expect(gate.due(1_000, true)).toBe(true)
   })
 })

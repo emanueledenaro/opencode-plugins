@@ -200,6 +200,23 @@ export const titleLine = (count: number, inner: number): { name: string; counter
 export type Scheduler = { set: (fn: () => void, ms: number) => unknown; clear: (handle: unknown) => void }
 
 /**
+ * Says when the 1 s sync must read the pending files. While a list is shown it reads every time, because the
+ * server consumes the file when the message is sent and a list expires. Otherwise it reads only when the
+ * folder changed since the last look (`stamp` is its modification time, undefined when it does not exist):
+ * a quote added in another window, or a file removed, changes it.
+ */
+export function createSyncGate() {
+  let seen: number | undefined | null = null // null: never looked
+  return {
+    due(stamp: number | undefined, listShown: boolean): boolean {
+      const changed = stamp !== seen
+      seen = stamp
+      return listShown || changed
+    },
+  }
+}
+
+/**
  * Turns a stream of measured widths into few updates: the first real size is applied at once, later
  * ones are coalesced to one update per `delayMs`, and a size that is already shown does nothing.
  */

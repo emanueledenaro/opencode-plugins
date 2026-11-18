@@ -57,6 +57,15 @@ export const createPendingFs = (dir: string = pendingDir()): PendingFs => ({
   },
 })
 
+/** The folder's modification time: it changes when a pending file is added, replaced or removed. */
+export const folderStamp = (fs: PendingFs): number | undefined => {
+  try {
+    return statSync(fs.dir).mtimeMs
+  } catch {
+    return undefined // the folder does not exist yet
+  }
+}
+
 /** Deletes pending files (and stray temp files) older than the expiry. Never throws. */
 export const sweepExpired = (fs: PendingFs, now: number = Date.now()): void => {
   try {

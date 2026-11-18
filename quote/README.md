@@ -44,7 +44,7 @@ Senza commento l'allegato contiene solo il testo citato. La descrizione dell'all
 
 Il campo di scrittura non invia un messaggio vuoto, per questo l'invio delle sole citazioni ha un tasto suo. Tutti i comandi sono anche nella palette (`ctrl+p`).
 
-`ctrl+y` e `alt+y` non sono usati da nessun comando di OpenCode 2.2. `alt` richiede che il terminale mandi Option come Meta; se non lo fa, usa il clic o il comando.
+`ctrl+y` e `alt+y` non sono usati da nessun comando di OpenCode (controllato sulla versione indicata nel README principale). `alt` richiede che il terminale mandi Option come Meta; se non lo fa, usa il clic o il comando.
 
 ## Come passa la citazione
 
@@ -75,3 +75,4 @@ Se qualcosa va storto, l'hook salta gli allegati e lascia il messaggio com'è: n
 - `index.ts` parte server (l'hook).
 - `tui.tsx` parte TUI (avviso, finestra del commento, tasti, scatola).
 - `quote-core.test.ts` test: `bun test`.
+- `quote-io.test.ts` test del file system, in una cartella temporanea.
